@@ -1,0 +1,70 @@
+---
+title: Client-Server Communication (Remotes)
+---
+import { File, Folder, Files } from 'fumadocs-ui/components/files';
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Effective communication between the client (player's machine) and the server is essential for interactive gameplay. This project utilizes Roblox's standard mechanisms, `RemoteEvent` and `RemoteFunction` instances, to facilitate this communication. This document outlines where these remotes are typically located and how they are used.
+
+## Location of Remotes
+
+To ensure both clients and the server can access the necessary communication endpoints, RemoteEvents and RemoteFunctions are primarily stored within `ReplicatedStorage`. Within `ReplicatedStorage`, they are further organized into specific folders, often based on the game system they relate to.
+
+Common locations observed in this project include:
+<Files>
+  <Folder name="ReplicatedStorage" defaultOpen>
+    <Folder name="Remotes" defaultOpen>
+        This appears to be the main container for general gameplay remotes.
+        <Folder name="RemoteEvent" defaultOpen>
+             Contains RemoteEvents used for actions that don't require an immediate response back to the sender. Examples include notifying the server of a character creation request (`CreateCharacter`) or loading request (`LoadCharacter`).
+             <File name="CreateCharacter" />
+             <File name="LoadCharacter" />
+             <File name="WipeoutCharacterData" />
+             <File name="..." />
+        </Folder>
+         <Folder name="RemoteFunction" defaultOpen>
+             Contains RemoteFunctions used when the client needs to request data from the server and wait for a direct response. An example is `RequestPlayerDataChar`, used by the client to get initial character info for the selection screen.
+             <File name="RequestPlayerDataChar" />
+             <File name="..." />
+        </Folder>
+    </Folder>
+    <Folder name="Events" defaultOpen>
+        This folder seems to hold remotes related to specific game events or notifications, potentially including both client-server and server-server communication (using BindableEvents). Examples include `ClientCharacterLoaded` (server notifying client) and `ServerLoadedChar` (server notifying other server scripts).
+        <File name="ClientCharacterLoaded" />
+        <File name="ServerLoadedChar" />
+         <File name="..." />
+    </Folder>
+     <Folder name="CM-X Remotes" defaultOpen>
+         This folder likely contains remotes specifically related to the integrated CM-X admin system, such as `CheckForJailed`.
+         <File name="CheckForJailed" />
+          <File name="..." />
+     </Folder>
+     {/* Other potential folders like RemoteEvents.Chat, RemoteEvents.Jobs etc. */}
+  </Folder>
+</Files>
+
+## Usage Patterns
+
+The project employs standard usage patterns for RemoteEvents and RemoteFunctions:
+
+**RemoteEvents:** These are used for one-way communication.
+*   **Client-to-Server:** When a client performs an action that the server needs to know about but doesn't require an immediate data response (e.g., requesting to load a character), the client script calls `RemoteEvent:FireServer(...)`. A corresponding server script listens using `RemoteEvent.OnServerEvent:Connect(function(player, ...))`, where `player` is automatically the player who fired the event.
+*   **Server-to-Client(s):** When the server needs to inform clients about a change or event (e.g., updating a UI element, playing a sound effect), it calls `RemoteEvent:FireClient(player, ...)` to target a specific player or `RemoteEvent:FireAllClients(...)` to notify everyone. Client scripts listen using `RemoteEvent.OnClientEvent:Connect(function(...))`.
+
+**RemoteFunctions:** These are used for two-way communication where the client needs an immediate response from the server.
+*   **Client-to-Server (Request/Response):** When a client needs data from the server before proceeding (e.g., requesting character slot details for the selection UI), the client script calls `local result = RemoteFunction:InvokeServer(...)`. This call *yields* (pauses) the client script until the server responds. The server defines a handler function using `RemoteFunction.OnServerInvoke = function(player, ...) return result end`. The value returned by the server function is received as `result` on the client, allowing the client script to resume.
+
+## Key Examples (Character Lifecycle)
+
+Several remotes are crucial to the character creation and loading process:
+
+*   **`RequestPlayerDataChar` (RemoteFunction):** The client invokes this to get a summary of the player's character slots (Name, Cash, Level) needed to populate the selection screen. The server returns tables containing this information.
+*   **`CreateCharacter` (RemoteEvent):** The client fires this after the player designs a new character, sending the details (name, gender, appearance, etc.) to the server. The server then handles validation, model creation, and saving the new data via ProfileService.
+*   **`LoadCharacter` (RemoteEvent):** The client fires this when the player selects an existing character slot to load. The server handles swapping the character model and applying all saved data from ProfileService.
+*   **`WipeoutCharacterData` (RemoteEvent):** Fired by the client to request the deletion of a character slot. The server clears the corresponding data in the player's profile.
+*   **`ClientCharacterLoaded` (RemoteEvent):** Fired by the server *to the specific client* after their chosen character model has been fully loaded, configured, and placed in the workspace, signaling that client-side character scripts can initialize.
+*   **`ServerLoadedChar` (BindableEvent - Internal):** While located in the `Events` folder, this is likely a `BindableEvent` used for *server-to-server* communication. It signals internally that the server-side character loading logic is complete, allowing other server systems (e.g., job assignment, faction systems) to react.
+
+<Callout title="Security Considerations">
+It is absolutely critical to implement security checks on the server for **all** incoming RemoteEvent and RemoteFunction calls. Clients have full control over the data they send, so the server must never implicitly trust it. Always validate data types, ranges, permissions (e.g., is this player allowed to perform this action?), cooldowns, and perform sanity checks before acting on any client request to prevent exploits.
+</Callout>

@@ -1,0 +1,79 @@
+---
+title: Project Structure & Conventions
+---
+import { File, Folder, Files } from 'fumadocs-ui/components/files';
+
+Understanding the organization of files and the naming conventions used is fundamental for navigating and contributing to this project. This document provides an overview of the directory layout within the `src` folder and explains the Argon file naming system used to differentiate script types.
+
+## Directory Layout (`src/`)
+
+The project's source code, located in the `src` directory, adheres to standard Roblox development practices. Scripts and assets are organized into folders based on their execution context (server or client) and replication behavior. This structure helps maintain clarity and ensures code runs in the appropriate environment.
+
+Below is a breakdown of the primary service folders and their typical contents:
+
+<Files>
+  <Folder name="ReplicatedFirst" defaultOpen>
+    This folder contains scripts and assets that must load before the game fully starts. It's typically used for loading screens, essential client-side initializations, or critical setup routines that need to run immediately when a player joins. Only LocalScripts (`.client.luau`) should reside here.
+    <File name="*.client.luau" />
+  </Folder>
+  <Folder name="ReplicatedStorage" defaultOpen>
+    As the name suggests, the contents of this folder are replicated to both the server and all connected clients. It serves as a central repository for shared resources like ModuleScripts (`.luau`) containing reusable code (utility functions, shared configurations), RemoteEvents and RemoteFunctions for client-server communication (often within a `Remotes` subfolder), and potentially shared assets like models or data tables (perhaps in an `Assets` subfolder).
+    <File name="*.luau" />
+    <Folder name="Modules" />
+    <Folder name="Remotes" />
+    <Folder name="Assets" />
+  </Folder>
+  <Folder name="ServerScriptService" defaultOpen>
+    This service is exclusively for server-side code. Scripts (`.server.luau`) and ModuleScripts (`.luau`) placed here are only accessible and executed by the server, ensuring security for sensitive operations. Core game logic, datastore interactions (like ProfileService), API integrations, and other backend functionalities typically reside within this service, often organized into subfolders like `Services` or `Modules`.
+    <File name="*.server.luau" />
+    <File name="*.luau" />
+    <Folder name="Services" />
+    <Folder name="Modules" />
+  </Folder>
+  <Folder name="ServerStorage" defaultOpen>
+    Similar to ServerScriptService, ServerStorage is server-only, but it's primarily intended for storing assets and modules that don't need to replicate to clients. This is a common place to keep original copies of tools, map assets, server-specific configuration modules, or other resources that the server might clone or access as needed.
+    <File name="*.luau" />
+    <Folder name="Tools" />
+    <Folder name="Modules" />
+  </Folder>
+  <Folder name="StarterGui" defaultOpen>
+    This folder holds the template GUI elements that are copied into each player's `PlayerGui` container when they join the game. It contains ScreenGuis, Frames, and associated LocalScripts (`.client.luau`) that handle user interface logic, input processing, and communication with the server for UI-related actions.
+    <File name="*.client.luau" />
+    <Folder name="ScreenGuiName" />
+  </Folder>
+  <Folder name="StarterPlayer" defaultOpen>
+    This container holds scripts that are distributed to players upon joining.
+    <Folder name="StarterPlayerScripts" defaultOpen>
+      Scripts placed here (typically LocalScripts `.client.luau` and associated ModuleScripts `.luau`) are copied into the player's `PlayerScripts` folder. They run on the client and are suitable for managing player-specific logic that isn't directly tied to their character's physical existence, such as global UI management, input handling, or client-side service interactions.
+      <File name="*.client.luau" />
+    </Folder>
+    <Folder name="StarterCharacterScripts" defaultOpen>
+      Scripts placed here (LocalScripts `.client.luau`, server Scripts `.server.luau`, or ModuleScripts `.luau`) are copied directly into each player's character model every time it spawns. These are ideal for logic directly controlling the character, like custom movement, animations, ability handling, or visual effects tied to the character's state.
+      <File name="*.client.luau" />
+      <File name="*.server.luau" /> {/* Server scripts can run here too */}
+    </Folder>
+  </Folder>
+   <Folder name="Workspace" defaultOpen>
+      The Workspace contains all the physical elements rendered in the 3D game world, including maps, parts, models, terrain, and potentially some scripts. While scripts can run directly in the Workspace, complex game logic is generally better organized within the service folders (ServerScriptService, ReplicatedStorage, etc.) for better maintainability and security.
+       <File name="*.server.luau" />
+       <File name="*.client.luau" />
+  </Folder>
+</Files>
+
+## Argon Naming Conventions
+
+This project utilizes the Argon build tool, which intelligently determines the type of script based on its file extension. This convention simplifies script management and eliminates the need for separate LocalScript/Script/ModuleScript instances in the Roblox hierarchy during development.
+
+The key extensions are:
+*   `.client.luau`: Argon interprets this as a **LocalScript**. These scripts run exclusively on the player's client machine.
+*   `.server.luau`: Argon interprets this as a standard **Script**. These scripts run exclusively on the game server.
+*   `.luau`: Argon interprets this as a **ModuleScript**. These modules contain reusable code that can be required (`require()`) by other scripts. Whether a ModuleScript can be accessed by the client or server depends on its location within the hierarchy (e.g., a module in ReplicatedStorage is accessible by both, while one in ServerScriptService is server-only).
+
+Strict adherence to these naming conventions is essential for the Argon toolchain to correctly build and run the game's scripts in their intended contexts.
+
+## Other Common Conventions
+
+Beyond the Argon naming, the project follows common organizational practices:
+*   **Modules:** Reusable code functions or classes are encapsulated within ModuleScripts (`.luau`). Shared modules accessible by both client and server are typically placed in `ReplicatedStorage/Modules`, while server-exclusive modules reside in `ServerScriptService/Modules`.
+*   **Remotes:** Client-server communication endpoints, RemoteEvents and RemoteFunctions, are generally centralized in `ReplicatedStorage/Remotes` for easy access and management.
+*   **Configuration:** Static configuration data (like settings, default values, or lists) might be stored within ModuleScripts for easy access and modification (e.g., the `ResetConfig` module referenced by the CharacterCreator).

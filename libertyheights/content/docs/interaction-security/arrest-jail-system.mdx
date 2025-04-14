@@ -1,0 +1,77 @@
+---
+title: Arrest & Jail System
+---
+import { Callout } from 'fumadocs-ui/components/callout';
+import { File, Folder } from 'fumadocs-ui/components/files';
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+# Arrest & Jail System
+
+This document details the mechanics behind arresting players, managing their time in jail, processing bail, and handling their eventual release. The system's core logic is primarily contained within `ReplicatedStorage/Modules/ArrestTimerModule.luau`, with server-side interactions managed through `ServerScriptService/ArrestTimerServer.server.luau`.
+
+## Overview
+
+The typical arrest flow begins with a police officer handcuffing a suspect using the Handcuff System. Following this, the officer likely interacts with a UI, triggering the `ProcessArrestEvent` RemoteFunction. This function call sends details like the suspect, crime reason, sentence duration (in minutes), and bail amount to the server. The `ArrestTimerServer` script validates the request (checking police permissions and ensuring the suspect is cuffed) before invoking the `ArrestTimerModule`. This module then takes over, saving the arrest details persistently, managing the sentence countdown, applying the necessary state changes to the player (prison outfit, teleportation, tool removal), and processing releases (timer expiry, bail, admin action).
+
+## Data Storage Methods
+
+To manage jail sentences effectively, especially across player sessions, the system utilizes two forms of data storage:
+
+1.  **Persistent Storage via ProfileService:** The primary record of an arrest is stored within the player's main data profile managed by ProfileService. Inside the active character's data table (`Profile.Data.RPCharacterOne` or `RPCharacterTwo`), an `ArrestData` table is created. This table holds crucial information needed for persistence: an `Arrested` flag, the `OriginalSentenceDuration` (total sentence length in seconds), the `ArrestTimestamp` (the exact time the arrest was processed using `os.time()`), the `ArrestReason`, the `ArrestingOfficer`'s name, and the set `BailAmount`. This data allows the system to calculate and resume the remaining sentence if the player leaves and rejoins while arrested. This persistent data is cleared upon release.
+
+2.  **Active Timers in Server Memory:** For players currently online and serving their sentence, the `ArrestTimerModule` maintains an internal server-side table named `ActiveTimers`. This table acts as a cache, mapping the `UserId` of each jailed player to a copy of their `ArrestData`. Crucially, the `ArrestTime` field within this in-memory table represents the *currently remaining* sentence duration in seconds, which is actively decremented by a server loop. Entries are added to this table upon successful arrest and removed immediately upon release or when the player disconnects from the server.
+
+## The Arrest Process Detailed
+
+When an officer initiates a formal arrest via the `ProcessArrestEvent`, the server performs several validation checks within `ArrestTimerServer`. It confirms the officer belongs to the correct police group and that the suspect is currently handcuffed (checking attributes set by the `HandCuffsModule`).
+
+If validation passes, the core logic within `ArrestTimerModule:ArrestPlayer` executes:
+*   It calculates the total sentence duration in seconds and records the current `os.time()` as the `ArrestTimestamp`.
+*   It constructs the `arrestData` table containing all relevant details, including the provided `BailAmount`.
+*   This `arrestData` is then saved into the player's persistent ProfileService data under the appropriate character slot.
+*   A copy of this data, with `ArrestTime` set to the full sentence duration, is added to the server's `ArrestTimerModule.ActiveTimers` table to start the live countdown.
+*   Detailed logs of the arrest are sent to designated Discord webhooks.
+*   The arrested player's client is notified via the `Events.ArrestTimerEvent` RemoteEvent, allowing their UI to display the sentence timer.
+*   The `HandCuffsModule.ClearHandcuffState` function is called to remove the physical handcuff state (welds, animations).
+*   The player's current outfit (`ShirtId`, `PantsId`) is saved to their profile for later restoration.
+*   All tools currently in the player's Backpack and equipped on their Character (excluding essentials like "Phone" and "Fist") are removed and temporarily stored in `ServerStorage/TempPlayerTools/[UserId]/`.
+*   A prison outfit (consisting of a random prison shirt variant and standard prison pants) is applied to the character model.
+*   The player's character is teleported using the `SafeTeleport` module to the designated prison spawn location (`workspace.PrisonInterior.PrisonSpawn`).
+*   "InJail" and "InPrison" boolean attributes are set on the character's HumanoidRootPart.
+*   Finally, the `Events.PlayerFormallyArrested` BindableEvent is fired to notify other interested server scripts that the arrest process is complete for this player.
+
+## Jail Timer Management
+
+The `ArrestTimerModule` manages the sentence countdown through a background loop initiated in its `Initialize` function. This loop runs every second and iterates through all entries in the `ActiveTimers` table. For each `UserId` found, it checks if the corresponding player is currently online. If the player is online, the module calls its internal `UpdateArrestTime` function. This function subtracts one second from the `ArrestTime` value stored in the `ActiveTimers` table for that player and fires the `ArrestTimerEvent` RemoteEvent to the player's client with the updated remaining time. If the `ArrestTime` reaches zero or less during this update, the `UpdateArrestTime` function automatically triggers the `ReleasePlayer` process.
+
+## The Release Process
+
+Release from jail can occur automatically when the timer expires, or manually through bail payment or administrative action. The `ArrestTimerModule:ReleasePlayer` function centralizes the steps required to restore the player's state:
+*   It first calls `HandCuffsModule.ClearHandcuffState` to ensure any lingering handcuff effects are removed.
+*   It removes the persistent `ArrestData` from the player's ProfileService data by setting it to `nil`.
+*   It removes the player's entry from the server's `ActiveTimers` table.
+*   It notifies other game systems about the release by firing the `PlayerArrestedServerNotify` BindableEvent (sending `false`) and the `ArrestTimerEvent` RemoteEvent (sending `nil`).
+*   It restores the player's original outfit by reading the `ShirtId` and `PantsId` that were saved in their profile during the arrest and applying them back to the character.
+*   It retrieves the player's tools from their temporary storage folder (`ServerStorage/TempPlayerTools/[UserId]/`), moves them back into the player's `Backpack`, and then deletes the temporary folder.
+*   Finally, it teleports the player using `SafeTeleport` to the designated jail release point, identified as `workspace.TpPads.Jail.NYPDTP1`.
+
+## Bail and Admin Release Mechanisms
+
+The system includes specific functions, exposed via RemoteFunctions, to allow early release:
+
+*   **Bail:** The `ProcessBail` RemoteFunction allows any player (not just police) to attempt to pay bail for an inmate. The server verifies the inmate is still actively serving time (checking `ActiveTimers`), retrieves the required `BailAmount` from the inmate's arrest data, checks if the paying player has sufficient `Cash` in their `Profile.Data`, deducts the funds if available, logs the transaction to Discord, and then calls `ReleasePlayer` to free the inmate.
+*   **Admin Release:** The `FreePrisoner` RemoteFunction allows authorized personnel (specifically, players with rank 5 [Sergeant] or higher in the configured NYPD group) to use an interface triggering the `FreePrisoner` RemoteFunction. After verifying the invoker's rank and the inmate's status, the server logs the action to Discord and calls `ReleasePlayer` to free the inmate without cost.
+
+## Handling Player Rejoins
+
+To maintain sentence progression even if a player logs off, the `ArrestTimerModule:HandlePlayerJoin` function runs when a player connects. After waiting for their ProfileService data and selected character slot to become available, it checks their persistent `Profile.Data[CharacterKey].ArrestData`. If valid arrest data exists, it calculates the time elapsed since the original `ArrestTimestamp`. By subtracting this elapsed time from the `OriginalSentenceDuration`, it determines the actual remaining sentence time.
+
+If time still remains, the player is effectively re-jailed: their data (with the updated remaining `ArrestTime`) is added back into the `ActiveTimers` table, the prison outfit is reapplied, and they are teleported back to the prison spawn. The client is also notified via `ArrestTimerEvent`. If the calculation shows that the sentence duration expired while the player was offline, the persistent arrest data is simply cleared from their profile, and they are allowed to spawn normally without being re-added to the `ActiveTimers`.
+
+<Callout title="Key Modules & Remotes">
+This system integrates several components:
+*   **Core Logic:** `ReplicatedStorage/Modules/ArrestTimerModule.luau`
+*   **Server Interface:** `ServerScriptService/ArrestTimerServer.server.luau`
+*   **Dependencies:** `HandCuffsModule`, `ProfileService/DataManager`, `SafeTeleport`, `WebhookModule`.
+*   **Remotes (in `ReplicatedStorage/Events/`):** `ProcessArrestEvent` (RF), `ArrestTimerEvent` (RE), `GetArrestedPlayers` (RF), `ProcessBail` (RF), `FreePrisoner` (RF), `PlayerArrestedNotify` (RE), `PlayerArrestedServerNotify` (BE), `PlayerFormallyArrested` (BE).
+</Callout>

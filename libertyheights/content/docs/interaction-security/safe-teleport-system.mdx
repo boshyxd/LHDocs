@@ -1,0 +1,45 @@
+---
+title: Safe Teleport System
+---
+import { Callout } from 'fumadocs-ui/components/callout';
+import { File, Folder } from 'fumadocs-ui/components/files';
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+# Safe Teleport System
+
+This document describes the `SafeTeleport` module located at `src/ServerScriptService/SafeTeleport.luau`. This module provides a standardized function for teleporting player characters within the game, ensuring compatibility with other systems like anti-cheat and ambient sound management.
+
+## Overview
+
+Instead of directly setting a character's CFrame or using `PivotTo` in various scripts, other server scripts (like the Character Creator during spawning, or the Arrest System during release) should call this module's function. The module then performs the actual teleport while also handling necessary side effects, primarily flagging the teleport for the anti-cheat system and managing sound fades for the player being teleported.
+
+## Core Functionality
+
+The module returns a single function that accepts the `character` model to be teleported and the `targetCFrame` destination.
+
+```lua
+local SafeTeleport = require(game:GetService("ServerScriptService").SafeTeleport)
+local character = --[[ Player's character model ]]
+local destinationCFrame = CFrame.new(0, 100, 0) -- Example destination
+
+SafeTeleport(character, destinationCFrame)
+```
+
+When called, the function performs the following actions:
+
+1.  **Anti-Cheat Flagging:** It attempts to require the `CheatModule` from the Anti-Cheat system (`ServerScriptService/AntiCheat/CheatModule.luau`). If successful, it sets a flag for the teleported character: `CheatModule.SafeTeleportFlags[character] = true`. This signals to the anti-cheat's position sampling loop that the *next* significant position change for this character is legitimate and should be ignored by teleport detection logic.
+2.  **Sound Management:** It interacts with the `ManageAmbienceSound` RemoteEvent (located in `ReplicatedStorage/Events/`) to control ambient sounds for the teleported player.
+    *   It tracks if this is the player's *first* teleport since joining the server (using an internal `playerFirstTeleportDone` table).
+    *   **First Teleport (Spawn):** If it's the first time, it fires `ManageAmbienceSound` to the client with the command `"Initialize"`. This likely ensures ambient sounds start playing normally without any initial fade effect.
+    *   **Subsequent Teleports:** For all teleports after the initial spawn, it fires `ManageAmbienceSound` to the client with the command `"ToggleFade"`. This presumably triggers a client-side script (like `StarterPlayerScripts/AmbienceSoundHandler.client.luau`) to fade the ambient sound out before the teleport and fade it back in afterwards, creating a smoother transition.
+3.  **Teleport Execution:** Finally, it performs the actual teleport using `character:PivotTo(targetCFrame)`.
+
+## Dependencies and Integration
+
+*   **Anti-Cheat:** Relies on the presence of `ServerScriptService/AntiCheat/CheatModule.luau`. If the Anti-Cheat system is disabled or moved, this module will warn but still perform the teleport. For the anti-cheat flagging to work, the `CheatModule` must expose the `SafeTeleportFlags` table.
+*   **Ambient Sound:** Requires a `RemoteEvent` named `ManageAmbienceSound` in `ReplicatedStorage/Events/` and a corresponding client-side script (e.g., `AmbienceSoundHandler.client.luau`) listening for the "Initialize" and "ToggleFade" commands to manage the actual sound playback and fading.
+*   **Usage:** Any server script that needs to teleport a player character should `require` and call this module instead of directly manipulating the character's CFrame, especially if anti-cheat teleport detection is active.
+
+<Callout title="Removed Interior Logic">
+The script contains commented-out code related to an `InteriorManager`. This suggests a previous version might have had more complex sound handling based on whether the teleport destination was inside or outside an interior, but this functionality appears to have been removed or simplified in the current version.
+</Callout>

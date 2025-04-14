@@ -1,0 +1,48 @@
+---
+title: Mask System (Shiesty)
+---
+import { Callout } from 'fumadocs-ui/components/callout';
+import { File, Folder } from 'fumadocs-ui/components/files';
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+This document describes the server-side system responsible for handling the visual states of the "Shiesty" mask, located in `ServerScriptService/Back-End Scripts/CharacterRelated/Mask Handler.server.luau`.
+
+## Overview
+
+This system allows players to toggle a specific ski mask ("Shiesty") through different states: fully on (covering the face), pulled down (around the neck), pulled up (on top of the head), or completely off. The server script listens for events triggered by player actions (likely from a client-side UI or keybind) and manages the character's appearance accordingly. This includes swapping the visible mask accessory, hiding or showing other potentially conflicting accessories (like hair or glasses), and updating the player's overhead name display to conceal or reveal their identity.
+
+## Key Components
+
+*   **Server Script:** `ServerScriptService/Back-End Scripts/CharacterRelated/Mask Handler.server.luau` contains the core logic.
+*   **Mask Accessories:** Three distinct `Accessory` instances representing the mask states are stored in `ReplicatedStorage/Clothes/MaskFolder/`:
+    *   `Shiesty (On)`: Mask fully covering the face.
+    *   `Shiesty (Down)`: Mask pulled down around the neck.
+    *   `Shiesty (UP)`: Mask pulled up onto the top of the head.
+    *   *(These accessories likely have a `SkiMask` attribute set to `true` for identification)*.
+*   **Events:** The script listens on two events named `MaskActionEvent`:
+    *   `ReplicatedStorage.Remotes.RemoteEvent.MaskActionEvent`: Likely fired by the client to request a state change.
+    *   `ReplicatedStorage.Events.MaskActionEvent`: Potentially a `BindableEvent` for other server scripts to trigger state changes.
+*   **Overhead UI:** The script interacts with `Character.Head.OverheadGUI` to change the displayed name.
+*   **Client UI State:** It updates `Player.PlayerGui.Mask.IsMaskOn` (a `BoolValue`) to reflect the mask's current visibility state for client-side UIs.
+
+## Mask States and Logic (`onMaskActionEvent`)
+
+The server script listens for the `MaskActionEvent` and expects an `action` string ("UP", "DOWN", "ON", "OFF") to determine the desired state:
+
+*   **Action "UP":** Activates the "mask up" state. It ensures the `Shiesty (UP)` accessory is present on the character and makes it visible. Simultaneously, it hides other Shiesty mask variants and makes standard accessories like Hair, Beards, and Glasses visible by setting their transparency. The player's overhead UI is updated to show their normal name.
+*   **Action "DOWN":** Activates the "mask down" state. It ensures the `Shiesty (Down)` accessory is present and visible. It hides other Shiesty variants and also hides Hair, Beards, and Glasses by making them transparent. The player's overhead UI shows their normal name.
+*   **Action "ON":** Activates the "mask fully on" state. It ensures the `Shiesty (On)` accessory is present and visible, while hiding other variants and Hair, Beards, and Glasses. Crucially, it sets a `"Masked"` attribute on the player's character model to `true` and updates the overhead UI to display a generic "Stranger[UserId]" identity.
+*   **Action "OFF":** Deactivates all masks. It sets the `"Masked"` attribute to `false`, hides all Shiesty mask variants by making them transparent, makes standard Hair, Beards, and Glasses visible again, and restores the player's normal name on the overhead UI.
+
+The script uses internal helper functions (`HideAccessory`, `HideAccessoryWithoutBeard`, `ShowOverhead`, `HideIdentity`) to manage the transparency adjustments of conflicting accessories and update the overhead UI text and visibility based on the requested mask state. If the required mask accessory isn't already attached to the character, the script clones it from `ReplicatedStorage` and adds it before adjusting transparencies.
+
+## Integration and Usage
+
+To utilize this mask system effectively:
+1.  Confirm the three required `Accessory` models (`Shiesty (On)`, `Shiesty (Down)`, `Shiesty (UP)`) are correctly placed in `ReplicatedStorage/Clothes/MaskFolder/`. It's advisable they share a common attribute (like `SkiMask = true`) for easy identification by the script.
+2.  Ensure other accessories intended to be hidden when the mask is manipulated (Hair, Beards, Glasses) have the appropriate `AccessoryType` (Hair) or a `SpecialType` attribute ("Beard", "Glasses") that the script checks for.
+3.  Implement the client-side trigger mechanism. This could be a keybind or UI button that fires the `MaskActionEvent` RemoteEvent, passing the desired action string ("UP", "DOWN", "ON", "OFF"). Server systems can also trigger changes using the BindableEvent variant if needed.
+
+<Callout title="Limitations">
+This handler script is specifically designed for the three "Shiesty" mask variants. Integrating different types of masks would necessitate significant modifications to this script or the creation of entirely new handler scripts and associated events tailored to those specific masks. Furthermore, the direct manipulation of accessory transparency might conflict with other game systems that also control accessory visibility (e.g., an invisibility cloak).
+</Callout>

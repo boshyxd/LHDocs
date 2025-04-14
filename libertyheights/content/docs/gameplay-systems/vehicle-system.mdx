@@ -1,0 +1,82 @@
+---
+title: Vehicle System
+---
+import { Callout } from 'fumadocs-ui/components/callout';
+import { File, Folder } from 'fumadocs-ui/components/files';
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+# Vehicle System
+
+This document describes how vehicles (cars) are managed, purchased, sold, customized, and spawned within the game.
+
+## Overview
+
+The vehicle system involves several components:
+*   **Car Models:** Stored in `ReplicatedStorage.Cars`, each with a `DealershipConfig` Configuration object holding price, description, and available colors.
+*   **In-Session Inventory:** `ServerStorage.Modules.CarInventory` manages a table (`carInvs`) mapping players to their owned cars *for the current server session only*.
+*   **Dealership:** `ServerScriptService/Dealership.server.luau` handles buying and selling cars, interacting with `CarInventory`.
+*   **Autoshop:** `ServerScriptService/CarAutoshop.server.luau` handles applying customizations, interacting with `CarInventory`.
+*   **Spawning/Handling:** `ReplicatedStorage.CarHandler` (likely `init.luau`) is responsible for the actual spawning and despawning of car models in the workspace.
+*   **Loading:** `ServerScriptService/LoadInventory/init.server.luau` currently only adds a default car to the in-memory `CarInventory` on player join.
+
+<Callout title="Persistence Not Implemented">
+A critical point to understand is that, based on the analyzed scripts, the vehicle system **currently lacks persistent storage for owned vehicles**. When a player buys a car via the `Dealership` script, the ownership information is only added to the in-memory `CarInventory` table and exists only for that specific server session. If the player leaves or the server restarts, this information is lost. Implementing persistence would require saving purchased car data (including customizations) to the player's ProfileService data and loading it back into the `CarInventory` module when the player rejoins.
+</Callout>
+
+## In-Session Car Data Structure
+
+The `CarInventory` module uses a server-side Lua table (`carInvs`) to track owned vehicles for online players. This table maps each `Player` object to another table, where the keys are the names of the owned cars (matching the model names in `ReplicatedStorage.Cars`).
+
+Each car's data within this structure typically includes:
+```lua
+-- Example entry within carInvs[player] table:
+["BMW X5 E70"] = {
+  Name = "BMW X5 E70", -- string: The car model's name
+  Customization = { -- table: Stores applied modifications like color
+      Color1 = Color3.new(...),
+      -- Potentially other fields: NeonColor, WheelType, etc.
+  },
+  Storage = {}, -- table: Intended for items stored within the vehicle
+  ["X-Bought"] = 1678886400 -- number: Internal timestamp (not sent to client)
+}
+```
+The `Customization` table holds details like paint color, while the `Storage` table is likely intended for future implementation of trunk or glovebox inventories. Fields prefixed with "X-" are treated as private and not synchronized with the client.
+
+## Purchase and Sale Process (Dealership)
+
+Players interact with dealerships through a UI, triggering server-side logic in `Dealership.server.luau`. When buying, the client invokes `RemoteEvents.Dealership.BuyCar` with the desired car name and color. The server validates the request (checking car existence and color validity) and then attempts to add the car to the player's in-memory inventory using `CarInventory.AddCar`. This function checks if the player already owns the car in the current session's `carInvs` table. If not, it adds the new car data and notifies the client via `RemoteEvents.Inventory.SyncCarInv`. **Note:** The logic to deduct money for the purchase is currently marked as a TODO and is not implemented. Furthermore, the purchase is **not saved persistently**.
+
+Selling a car follows a similar pattern via the `RemoteEvents.Dealership.SellCar` remote. The server validates the request, removes the car from the in-memory `carInvs` table using `CarInventory.RemoveCar`, despawns the physical car model using `CarHandler.DespawnCar`, and notifies the client. **Note:** The logic to credit the player with the resale value is also marked as TODO, and the removal is **not saved persistently**.
+
+## Customization Process (Autoshop)
+
+Vehicle customization is handled by `CarAutoshop.server.luau`. When a player applies modifications through an autoshop UI, the client sends the car name and a table of changes to the server (likely via a dedicated RemoteEvent/Function). The server script should validate ownership and deduct costs (currently marked as TODOs) before calling `CarInventory.UpdateCustomization`. This function merges the received changes into the `Customization` table for the specified car within the in-memory `carInvs` table and syncs the updated data to the client via `RemoteEvents.Inventory.SyncCarInv`. As with purchasing, these customization changes are **not currently saved persistently**.
+
+## Spawning and Despawning
+
+The physical presence of cars in the workspace is managed by the `CarHandler` module. Functions like `SpawnCar` and `DespawnCar` are invoked by other systems (e.g., garage UIs, the dealership's sell function) to create or remove car models. When spawning, the `CarHandler` would typically clone the base model from `ReplicatedStorage.Cars` and then apply the specific customizations stored in the player's in-memory `CarInventory` data.
+
+## Adding New Vehicles
+
+To add a new vehicle to the game for purchase:
+
+<Steps>
+<Step>
+**Create Model:** Construct the vehicle model, ensuring it includes any necessary scripts or values expected by the `CarHandler` system for proper functionality (e.g., driving scripts, seats).
+</Step>
+<Step>
+**Store Model:** Place the completed vehicle model into the `ReplicatedStorage.Cars` folder.
+</Step>
+<Step>
+**Add Configuration:** Create a `Configuration` instance named `DealershipConfig` as a child of the vehicle model. Add string Attributes named `Desc` (for the description) and `Price` (for the cost) to this `DealershipConfig`. Create another `Configuration` instance named `DealershipColors` as a child of `DealershipConfig`. Inside `DealershipColors`, add `Color3` Attributes for each purchasable color option; the name of the attribute can be descriptive (e.g., "RacingRed"), but the value must be the actual `Color3`.
+</Step>
+<Step>
+**Test:** Verify the new vehicle appears correctly in the dealership UI, can be "purchased" (added to the in-memory inventory), customized via the autoshop (updates the in-memory data), spawned using the appropriate system, and "sold" (removed from the in-memory inventory). Remember that ownership will not persist across sessions without further implementation.
+</Step>
+</Steps>
+
+<Callout title="Persistence Implementation Required">
+To enable persistent vehicle ownership, significant additions are needed:
+1.  **Saving:** Logic must be added (likely within `Dealership.server.luau` and `CarAutoshop.server.luau`) to write relevant car data (Name, Customization, Storage) into a dedicated table (e.g., `Profile.Data.OwnedCars`) within the player's ProfileService data whenever a car is purchased or customized. Similarly, selling a car must remove its entry from this persistent table.
+2.  **Loading:** The `LoadInventory/init.server.luau` script (or potentially the `CharacterCreator`) needs modification to read the saved `OwnedCars` table from the player's loaded `Profile.Data`. This loaded data should then be used to populate the `CarInventory` module's in-memory `carInvs` table for the current session using `CarInventory.SetInventory`.
+</Callout>

@@ -1,0 +1,10 @@
+{
+  "title": "Gameplay Systems",
+  "pages": [
+    "inventory-system",
+    "economy-system",
+    "job-system",
+    "vehicle-system",
+    "chat-system"
+  ]
+}

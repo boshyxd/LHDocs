@@ -1,0 +1,78 @@
+---
+title: Character Lifecycle (Creation & Loading)
+---
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+import { Callout } from 'fumadocs-ui/components/callout';
+
+This document describes the sequence of events involved when a player either creates a new character or loads an existing one into the game world. This process spans from the initial player connection and data loading through ProfileService to the final setup and spawning of the player's chosen RP character. The primary orchestrator for this lifecycle is the `CharacterCreator` script located at `ServerScriptService/Back-End Scripts/CharacterRelated/CharacterCreator [Main Handler]/init.server.luau`.
+
+## Overview Flow
+
+The character lifecycle begins when a player joins the game. ProfileService, via the `DataManager` module, loads the player's persistent data profile. Once loaded, the client-side UI requests basic information about the available character slots by invoking the `RequestPlayerDataChar` RemoteFunction. The server responds with summarized data (like name, cash, level) for any registered character slots.
+
+Based on this information, the client presents the character selection or creation interface. The player then chooses an action: either creating a new character (firing the `CreateCharacter` RemoteEvent with details) or loading an existing one (firing the `LoadCharacter` RemoteEvent with the slot number).
+
+The server-side `CharacterCreator` script listens for these events. Upon receiving a request, it retrieves the detailed character data from the loaded profile using its `GetSavedDataTable` function. It then performs the core logic: swapping the player's current character model, applying all saved or default visual attributes (appearance, clothing, accessories), applying stats, setting up the overhead UI, teleporting the character to the correct spawn location, and updating live `PlayerData` values. Finally, it fires events to notify both the client (`LoadCharEvent` or `CreateCharEvent`) and other server systems (`ServerLoadedChar`) that the process is complete. ProfileService handles the automatic saving of any changes made to the `Profile.Data` during this process, while explicit saves (`SaveData`, `SaveData2`) are triggered upon new character creation.
+
+## Detailed Steps
+
+The character creation and loading process follows these key steps:
+
+<Steps>
+<Step>
+**Profile Loading:** Upon a player joining, the `DataManager` (`ServerScriptService/ProfileService/DataManager`) initiates the loading of their unique data profile using ProfileService. Server scripts that depend on this data, such as the `CharacterCreator`, must wait until the profile is successfully loaded and available in the `DataManager.Profiles` table before proceeding with character-specific logic. A typical pattern involves a loop with `task.wait` until `DataManager.Profiles[player]` is no longer nil.
+
+```lua
+-- Waiting for profile example (from CharacterCreator)
+local Profile
+local waitTime = 0
+-- ... wait loop ...
+while not Profile and waitTime < MAX_PLAYERDATA_WAIT do
+    Profile = DataManager.Profiles[player]
+    if not Profile then
+        waitTime += task.wait(PLAYERDATA_WAIT_STEP)
+    end
+end
+if not Profile then player:Kick(...) end
+```
+</Step>
+<Step>
+**Client Data Request & UI Population:** Once the client is ready (e.g., after the loading screen), the character selection UI script invokes the `RequestPlayerDataChar` RemoteFunction. The server responds by executing its `OnServerInvoke` handler. This handler accesses the player's loaded profile and uses an internal `InitializeInfo` function to extract summary data (checking `IsRegisteredOne`/`Two` flags and retrieving name, cash, level) for each character slot. This summarized data is sent back to the invoking client, which then uses it to populate the character selection screen, showing existing characters or available slots.
+
+```lua
+-- Server Invoke Handler (Simplified)
+PlayerRequestData.OnServerInvoke = function(player)
+    local Profile = DataManager.Profiles[player]
+    -- ... wait for profile ...
+    local ToSendTableOne, ToSendTableTwo = InitializeInfo(Profile)
+    return ToSendTableOne, ToSendTableTwo
+end
+```
+</Step>
+<Step>
+**Client Action (Create or Load):** The player interacts with the UI, choosing either to create a new character in an available slot or load an existing one. This client-side action results in firing one of two RemoteEvents back to the server:
+*   `CreateCharacter` event, passing the player object, a table containing the new character's details (name, gender, appearance choices), and the target slot number (1 or 2).
+*   `LoadCharacter` event, passing the player object and the chosen slot number (1 or 2).
+</Step>
+<Step>
+**Server: Character Creation (`MakeCharacter`):** The `CharacterCreator` script listens for the `CreateCharacter.OnServerEvent`. When triggered, it first performs server-side validation on the received character details using its `ServerCheckData` function to prevent invalid data. If validation passes, it calls the `MakeCharacter` function.
+
+Inside `MakeCharacter`, the script performs the following actions: It retrieves an appropriate base character model based on gender and height (`GetCharacter`), swaps the player's existing `player.Character` reference to this new model, carefully transfers essential scripts (like animation handlers) from the old character model to the new one, applies the chosen skin tone and hair (using default colors initially), equips random starter clothing (`SetRandomClothing`), sets up the overhead UI, teleports the character to a default spawn point (`SpawnLocate`), gives the player a phone tool (`givePhoneToPlayer`), caches the new character model for potential later use (`CacheThisModel`), updates the live `player.PlayerData` values (like RPName), explicitly saves the new character's core data into the corresponding slot in `Profile.Data` using `SaveData` or `SaveData2`, and finally fires the `CreateCharEvent` back to the client and the `ServerLoadedChar` BindableEvent for other server scripts. Note that clothing applied here is saved shortly after via `SaveClothing`.
+</Step>
+<Step>
+**Server: Character Loading (`LoadCharacter`):** The `CharacterCreator` script listens for the `LoadCharacter.OnServerEvent`. When triggered, it calls the `LoadCharacter` function with the specified slot number.
+
+Inside `LoadCharacter`, the script first retrieves the *full saved data* for the chosen slot using `GetSavedDataTable`. It then proceeds similarly to character creation by getting the base model and swapping `player.Character`. However, instead of applying defaults, it meticulously applies all *saved* data: appearance details (skin tone, hair with saved color, facial hair with saved color), saved clothing IDs (`SetClothing`), and the array of saved accessories (`AddAccessories`). It sets up the UI, teleports the player (checking jail status via `ArrestTimerModule` first), gives the phone, caches the model, updates all relevant `player.PlayerData` values based on the loaded data (`SendPlayerInfo`, `SetNameData`, Level, Exp), and fires the `LoadCharEvent` to the client and `ServerLoadedChar` internally.
+</Step>
+<Step>
+**Data Persistence:** ProfileService ensures data persistence. Any direct modifications made to the `Profile.Data` table during gameplay (like cash changes, level updates, adding/removing accessories) are automatically queued for saving by ProfileService and written to the datastore periodically and upon player logout or server shutdown. Data for newly created characters is explicitly saved into the profile using the `SaveData` or `SaveData2` functions within the `CharacterCreator` script when the `CreateCharacter` event is processed. Clothing is also explicitly saved via `SaveClothing`. Data loading occurs when the profile is initially loaded by `DataManager` and subsequently read by `GetSavedDataTable` during the character load process.
+</Step>
+</Steps>
+
+<Callout title="Key Scripts & Modules">
+The character lifecycle involves coordination between several key components:
+*   **Character Creator:** `ServerScriptService/Back-End Scripts/CharacterRelated/CharacterCreator [Main Handler]/init.server.luau` (Main orchestrator)
+*   **ProfileService:** `ServerScriptService/ProfileService/` (Handles data loading/saving, especially `DataManager`)
+*   **Remotes:** Located in `ReplicatedStorage/Remotes/` and `ReplicatedStorage/Events/` (Client-server communication)
+*   **Arrest System:** `ReplicatedStorage/Modules/ArrestTimerModule.luau` & `ServerScriptService/ArrestTimerServer.server.luau` (Checked during spawn teleport)
+</Callout>

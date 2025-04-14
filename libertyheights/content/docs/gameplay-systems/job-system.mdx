@@ -1,0 +1,134 @@
+---
+title: Job System
+---
+import { Callout } from 'fumadocs-ui/components/callout';
+import { File, Folder } from 'fumadocs-ui/components/files';
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+# Job System
+
+This document details the game's job system, explaining its modular structure, how players interact with jobs, and the underlying communication mechanisms. The central server script managing this system is located at `ServerScriptService/JobManager/init.server.luau`.
+
+## Overview
+
+The job system employs a modular design. Each distinct job available in the game (e.g., Pizza Delivery, Taxi Driver) is defined by its own dedicated `ModuleScript` located within the `ServerScriptService/JobManager/Jobs/` folder. The main `JobManager` script automatically loads and initializes these individual job modules when the server starts. It acts as a central hub, handling player requests to apply for or leave jobs, provides clients with lists of available jobs, and can optionally track player presence within designated physical job locations (workplaces).
+
+## Job Module Structure and Responsibilities
+
+For a job to be recognized and managed by the `JobManager`, its corresponding `ModuleScript` must return a Lua table adhering to a specific structure, containing properties and functions that the manager relies on. This standardized structure allows the `JobManager` to interact with any job type consistently.
+
+```lua
+-- Example Structure (inside ServerScriptService/JobManager/Jobs/MyJob.luau)
+local JobModule = {}
+
+-- Essential Properties for Listing & Application
+JobModule.ListingName = "My Job Name" -- Unique name displayed in job UIs
+JobModule.ListingOpen = true -- Boolean: Can players currently apply?
+JobModule.SpotsVacant = true -- Boolean: Are there open slots? (Checked by JobManager during application)
+
+-- Optional Property for Location Tracking
+JobModule.Workplace = workspace:FindFirstChild("MyJobBuilding") -- Model or Part reference
+
+-- Dynamic Data Storage
+JobModule.Values = script:FindFirstChild("Values") or Instance.new("Folder", script)
+JobModule.Values.Name = "Values"
+-- Example: Instance.new("IntValue", JobModule.Values).Name = "ActiveWorkers"
+
+-- Internal State & Events (Used by JobManager and the module itself)
+JobModule.CharactersOnSite = {} -- Populated by JobManager if Workplace is defined
+JobModule.JobsiteEntered = Instance.new("BindableEvent") -- Fired by JobManager
+JobModule.JobsiteLeft = Instance.new("BindableEvent") -- Fired by JobManager
+JobModule.WorkerRemoved = Instance.new("BindableEvent") -- MUST be fired by this module when a worker leaves/is removed
+
+-- Core Functions
+function JobModule.Apply(player)
+	-- Logic for when a player attempts to join this job.
+	-- Check requirements (level, items, etc.), update internal lists,
+	-- potentially decrease available spots via JobModule.Values.
+	local canJoin = true -- Placeholder for actual application logic
+	if canJoin then
+		print(player.Name .. " successfully applied for: " .. JobModule.ListingName)
+		-- Update Values if needed: JobModule.Values.ActiveWorkers.Value += 1
+	end
+	return canJoin -- Return true if successful, false otherwise
+end
+
+function JobModule.OnPlayerLeaveJob(player)
+	-- Logic for when a player leaves or is removed from this job.
+	-- Update internal lists, potentially increase available spots.
+	print(player.Name .. " left job: " .. JobModule.ListingName)
+	-- Update Values if needed: JobModule.Values.ActiveWorkers.Value -= 1
+	-- CRUCIAL: Fire WorkerRemoved so JobManager clears PlayerData.Job
+	JobModule.WorkerRemoved:Fire(player)
+end
+
+-- Required Helper for JobManager
+function JobModule.GetJobData()
+	-- Returns a snapshot of the current dynamic data for UI listings.
+	local data = {}
+	for _, v : ValueBase in ipairs(JobModule.Values:GetChildren()) do
+		data[v.Name] = v.Value
+	end
+	return data
+end
+
+-- Optional: Internal event handling for jobsite presence
+JobModule.JobsiteEntered.Event:Connect(function(character)
+	-- Logic when a worker enters the job's physical location
+end)
+JobModule.JobsiteLeft.Event:Connect(function(character)
+	-- Logic when a worker leaves the job's physical location
+end)
+
+return JobModule
+```
+
+Key elements required in each job module include: `ListingName` (unique identifier for UIs), `ListingOpen` and `SpotsVacant` booleans for availability control, an optional `Workplace` reference for physical location tracking, and a `Values` folder containing `ValueBase` objects (like `IntValue`, `StringValue`) to hold dynamic data (e.g., worker counts or stock levels). Crucially, the module must implement the `Apply(player)` function (returning `true` on success) and the `OnPlayerLeaveJob(player)` function, which **must** fire the `WorkerRemoved` BindableEvent upon completion.
+
+## Player Job State Management
+
+A player's current employment status is tracked by the `JobManager` using a `StringValue` named `Job` located under their `PlayerData` folder (`player.PlayerData.Job`). This value stores the `ListingName` of their active job. If the value is an empty string, the player is considered unemployed. When a job module fires its `WorkerRemoved` event (triggered within its `OnPlayerLeaveJob` function), the `JobManager` listens for this and automatically clears the `player.PlayerData.Job.Value` to reflect their departure from the job.
+
+## Client-Server Communication
+
+Interactions related to jobs, primarily initiated from client-side UIs, are handled through RemoteEvents and RemoteFunctions located in `ReplicatedStorage.RemoteEvents.Jobs`:
+
+*   **`LoadListings` (RemoteFunction):** Clients call this to get a dictionary of all currently available jobs (`ListingOpen = true`) and their associated dynamic data (retrieved via `GetJobData` from each module).
+*   **`ApplyListing` (RemoteFunction):** A client invokes this when a player attempts to join a specific job, passing the `ListingName`. The server calls the corresponding job module's `Apply` function and returns the boolean success status to the client.
+*   **`LeaveJob` (RemoteFunction):** A client invokes this when a player chooses to quit their current job. The server identifies the player's current job from `PlayerData.Job.Value` and calls the appropriate job module's `OnPlayerLeaveJob` function.
+*   **`ListingDataChanged` (RemoteEvent):** The `JobManager` automatically fires this event to all clients whenever a `ValueBase` within any job module's `Values` folder changes. Clients can listen to this to dynamically update job listing UIs (e.g., showing updated worker counts).
+*   **`JobStarted` (RemoteEvent):** Fired by the server specifically to the client whose `ApplyListing` request was successful.
+*   **`JobLeft` (RemoteEvent):** Fired by the server specifically to the client after their `OnPlayerLeaveJob` function has been processed.
+*   **`CreateListing` (RemoteEvent):** Appears intended to notify clients about newly available jobs, but the logic to fire this event seems inactive in the current `JobManager` script.
+
+## Adding a New Job
+
+Creating a new job involves several steps:
+
+<Steps>
+<Step>
+**Create Module Script:** Start by creating a new `ModuleScript` file within the `ServerScriptService/JobManager/Jobs/` directory.
+</Step>
+<Step>
+**Implement Structure:** Populate the new module script, ensuring it returns a table that includes the required properties (`ListingName`, `Values` folder instance, etc.) and functions (`Apply`, `OnPlayerLeaveJob`, `GetJobData`).
+</Step>
+<Step>
+**Develop Job Logic:** Implement the specific gameplay mechanics for the job. This could involve creating associated tools, UI elements, server-side logic for tasks, track progress, calculate payouts, and manage any dynamic state by updating the `ValueBase` instances within the module's `Values` folder.
+</Step>
+<Step>
+**Create `Values` Folder:** In the Roblox Studio Explorer, add a `Folder` named "Values" as a direct child of the newly created job ModuleScript. Inside this folder, create the necessary `IntValue`, `StringValue`, `BoolValue`, etc., instances required to store the job's dynamic data (e.g., an `IntValue` named "Workers").
+</Step>
+<Step>
+**(Optional) Define Workplace:** If the job is tied to a specific physical area, set the `Workplace` property in the module script to reference the corresponding `Model` or `Part` located in the `workspace`. You can then connect functions to the `JobsiteEntered` and `JobsiteLeft` events within the module to trigger location-based logic.
+</Step>
+<Step>
+**(Optional) Client-Side UI:** If the job requires specific interfaces (e.g., task lists, interaction prompts, progress bars), create the necessary `ScreenGui` elements within `StarterGui` and implement their associated `LocalScript`s, using the `RemoteEvents.Jobs` channel for communication with the server-side module.
+</Step>
+<Step>
+**Testing:** Thoroughly test the entire job lifecycle: ensure players can view and apply for the job via the UI, the core gameplay mechanics function correctly, dynamic data updates are reflected accurately in any UIs, players can successfully leave the job, and their `player.PlayerData.Job` value is properly cleared upon departure.
+</Step>
+</Steps>
+
+<Callout title="Job Listing Activation">
+While the `JobManager` script automatically loads and initializes all valid modules found within the `Jobs` folder, the specific code block that would iterate through these loaded jobs and make them initially visible in the job listings (likely by calling a function like `CreateJobListing` mentioned in earlier comments within the script) appears to be commented out at the end of the current `JobManager` script. This functionality might need to be enabled or implemented elsewhere for newly added jobs to appear dynamically in the game's job board UI.
+</Callout>

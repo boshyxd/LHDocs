@@ -1,0 +1,237 @@
+---
+title: Main Character Datastore (ProfileService)
+---
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+import { Callout } from 'fumadocs-ui/components/callout';
+
+This document outlines the structure and usage of the game's main character datastore system. This system is responsible for saving and loading persistent data associated with player characters, such as their appearance, stats, and inventory.
+
+## Overview
+
+The foundation of this system is the **ProfileService** module, located within `ServerScriptService/ProfileService`. Interaction with ProfileService is primarily managed through the `DataManager` module found in the same directory. ProfileService is a robust solution that handles the underlying complexities of Roblox datastores, including critical features like session locking (preventing data corruption from multiple servers accessing the same profile simultaneously), automatic data saving, and data backups.
+
+Player data is organized per `UserId`, and within each player's profile, data for up to two distinct character slots (`RPCharacterOne` and `RPCharacterTwo`) is stored. This allows players to maintain separate progress and identities for different characters.
+
+## Stored Data Structure
+
+All persistent character data resides within the `Profile.Data` table, which is accessed via `DataManager.Profiles[player]`. This table contains flags indicating which character slots are active (`IsRegisteredOne`, `IsRegisteredTwo`), a timestamp for the last logout (`LastLogout`), and then dedicated tables for each character slot (`RPCharacterOne`, `RPCharacterTwo`).
+
+The structure within each character slot table includes various categories:
+
+```lua
+-- Example structure within Profile.Data.RPCharacterOne (or RPCharacterTwo)
+{
+  -- Core RP Info
+  RPFirstName = "unnamed", -- string
+  RPLastName = "unnamed", -- string
+  RPGender = "", -- string ("M" or "F")
+  RPHeight = 0, -- string (Name of height model, e.g., "Medium")
+
+  -- Appearance
+  RPHair = "", -- string (Name of hair asset)
+  RPFacialHair = "unnamed", -- string (Name of facial hair asset)
+  RPHairColor = { R = 0, G = 0, B = 0 }, -- table (Raw Color3 components 0-1)
+  RPFacialHairColor = { R = 0, G = 0, B = 0 }, -- table (Raw Color3 components 0-1)
+  RPSkinTone = { R = 0, G = 0, B = 0 }, -- table (Raw Color3 components 0-1)
+
+  -- Clothing & Accessories
+  ShirtId = "7042521158", -- string (Asset ID)
+  PantsId = "5893987232", -- string (Asset ID)
+  Accessories = {}, -- array of tables: { Type = string, Name = string }
+
+  -- Economy & Stats
+  Cash = 50, -- number
+  InATM = 0, -- number
+  Exp = 0, -- number
+  Level = 1, -- number
+
+  -- Status & Permissions
+  AdminJailed = false, -- boolean
+  AdminJailExpiryTime = 0, -- number (Timestamp)
+  HasGunPermit = false, -- boolean
+
+  -- Inventory (Example - structure might vary)
+  VaultSafe1 = {}, -- table (Likely inventory items)
+
+  -- Other fields might exist...
+}
+```
+
+Key data points stored per character include core roleplaying information (name, gender, height), detailed appearance data (hair asset names, skin/hair colors stored as raw RGB components), clothing asset IDs (`ShirtId`, `PantsId`), an array of equipped accessories (`Accessories`), economic values (`Cash`, `InATM`), and player stats (`Exp`, `Level`). Status flags like `AdminJailed` and permissions like `HasGunPermit` are also stored here, along with specific inventory containers like `VaultSafe1`.
+
+## Loading and Applying Data
+
+The process of loading a character involves several steps orchestrated primarily by the `CharacterCreator` script (`ServerScriptService/Back-End Scripts/CharacterRelated/CharacterCreator [Main Handler]/init.server.luau`):
+
+First, upon player join, the `DataManager` begins loading the player's profile. Other scripts, including the `CharacterCreator`, wait until this profile is accessible via `DataManager.Profiles[player]`.
+
+Once the profile is loaded and the player selects a character slot (1 or 2), the `GetSavedDataTable` function within the `CharacterCreator` reads the specific data for that slot (e.g., `Profile.Data.RPCharacterOne`) from the loaded profile.
+
+The `LoadCharacter` function then takes this retrieved data table and applies it to the player in the game world. This involves swapping the player's current character model with a new one matching the saved gender and height, applying all saved appearance details (skin tone, hair, clothing, accessories), setting up the overhead UI, updating corresponding `ValueBase` instances under `player.PlayerData` for live game state tracking (like Cash, Level, RPName), teleporting the player to their correct spawn location (considering admin or jail status), and finally firing events (`ServerLoadedChar`, `ClientCharacterLoaded`) to signal other systems that the character is ready.
+
+## Modifying Data
+
+Modifying persistent character data is done by directly altering the values within the player's `Profile.Data` table (e.g., `Profile.Data.RPCharacterOne.Cash = 100`). ProfileService is designed to automatically detect these changes and save them to the Roblox datastore periodically during the session and reliably when the player leaves or the server shuts down.
+
+To modify data, you first need to get a reference to the player's loaded profile:
+```lua
+local DataManager = require(game:GetService("ServerScriptService").ProfileService:FindFirstChild("DataManager"))
+local player = --[[ The Player object ]]
+local Profile = DataManager.Profiles[player]
+
+if not Profile then
+    warn("Profile not loaded for player:", player.Name)
+    return
+end
+```
+
+Then, identify the correct character slot table (`RPCharacterOne` or `RPCharacterTwo`) and modify the desired field within `Profile.Data`:
+```lua
+local characterSlot = player.PlayerData.CurrentChar.Value -- Get current slot (1 or 2)
+local characterKey = "RPCharacter" .. (characterSlot == 1 and "One" or "Two")
+
+-- Example: Add 100 cash
+if Profile.Data[characterKey] then
+    Profile.Data[characterKey].Cash = (Profile.Data[characterKey].Cash or 0) + 100
+    -- IMPORTANT: Update live PlayerData value for UI/gameplay sync
+    if player.PlayerData and player.PlayerData.Cash then
+        player.PlayerData.Cash.Value = Profile.Data[characterKey].Cash
+    end
+    print(player.Name .. "'s cash updated to:", Profile.Data[characterKey].Cash)
+else
+    warn("Character key not found in profile data:", characterKey)
+end
+
+-- ProfileService handles saving the change to Profile.Data automatically.
+```
+Remember to also update any corresponding live values (like those in `player.PlayerData`) if immediate game state changes or UI updates are required.
+
+<Tabs items={['Add Accessory', 'Update Level', 'Save Clothing']}>
+    <Tab value="Add Accessory">
+         ```lua
+        local characterSlot = player.PlayerData.CurrentChar.Value
+        local characterKey = "RPCharacter" .. (characterSlot == 1 and "One" or "Two")
+
+        local newAccessory = {
+            Type = "Hat", -- Must match types in AccessoryLookUpTables
+            Name = "Fedora" -- Must match accessory name in ReplicatedStorage
+        }
+
+        -- Ensure Accessories table exists
+        if not Profile.Data[characterKey].Accessories then
+             Profile.Data[characterKey].Accessories = {}
+        end
+
+        -- Avoid duplicates (optional check)
+        local alreadyExists = false
+        for _, existingAcc in ipairs(Profile.Data[characterKey].Accessories) do
+            if existingAcc.Type == newAccessory.Type and existingAcc.Name == newAccessory.Name then
+                alreadyExists = true
+                break
+            end
+        end
+
+        if not alreadyExists then
+            table.insert(Profile.Data[characterKey].Accessories, newAccessory)
+            print("Added accessory:", newAccessory.Name)
+            -- Apply to live character if needed
+        else
+            warn("Accessory already equipped:", newAccessory.Name)
+        end
+        ```
+    </Tab>
+    <Tab value="Update Level">
+        ```lua
+        local characterSlot = player.PlayerData.CurrentChar.Value
+        local characterKey = "RPCharacter" .. (characterSlot == 1 and "One" or "Two")
+
+        local newLevel = Profile.Data[characterKey].Level + 1
+        Profile.Data[characterKey].Level = newLevel
+        Profile.Data[characterKey].Exp = 0 -- Reset EXP on level up (example)
+
+        -- Update live PlayerData
+        player.PlayerData.Level.Value = newLevel
+        player.PlayerData.Exp.Value = 0
+
+        print(player.Name .. " leveled up to:", newLevel)
+        ```
+    </Tab>
+     <Tab value="Save Clothing">
+        ```lua
+        -- Logic from CharacterCreator [Main Handler]/init.server.luau
+        local function SaveClothing(Player, option)
+            local Profile = DataManager.Profiles[Player]
+            if Profile then
+                local characterKey = "RPCharacter" .. (option == 1 and "One" or "Two")
+                local ToFindPants = Player.Character:FindFirstChildWhichIsA("Pants")
+                local ToFindShirt = Player.Character:FindFirstChildWhichIsA("Shirt")
+                local shirtId = ToFindShirt and ToFindShirt.ShirtTemplate:match("rbxassetid://(%d+)")
+                local pantsId = ToFindPants and ToFindPants.PantsTemplate:match("rbxassetid://(%d+)")
+
+                if shirtId then Profile.Data[characterKey].ShirtId = shirtId end
+                if pantsId then Profile.Data[characterKey].PantsId = pantsId end
+                 print("Saved clothing for", Player.Name, "slot", option)
+            else
+                warn("[!] Can't save clothing for", Player.Name, ".. profile not found")
+            end
+        end
+
+        -- Example Usage:
+        local characterSlot = player.PlayerData.CurrentChar.Value
+        SaveClothing(player, characterSlot)
+        ```
+    </Tab>
+</Tabs>
+
+## Adding New Data Fields
+
+Adding new persistent data fields for characters involves updating the ProfileService template and the scripts that interact with it.
+
+<Steps>
+<Step>
+**Update ProfileService Template:** The core `ProfileTemplate` table, usually defined within the main ProfileService script (`ServerScriptService/ProfileService/init.lua` or similar), needs to be modified. Add your new field with its default value inside *both* the `RPCharacterOne` and `RPCharacterTwo` template tables.
+
+```lua
+-- Inside ProfileService's ProfileTemplate (example location)
+local ProfileTemplate = {
+    -- ... other fields ...
+    RPCharacterOne = {
+        -- ... existing fields ...
+        NewDataField = defaultValue -- Add new field here
+    },
+    RPCharacterTwo = {
+        -- ... existing fields ...
+        NewDataField = defaultValue -- Add new field here
+    },
+    -- ... other fields ...
+}
+```
+</Step>
+<Step>
+**Update Loading Logic:** The `CharacterCreator` script needs to be updated to handle the new field. Modify the `GetSavedDataTable` function to retrieve the `NewDataField` from the loaded `Profile.Data`. Then, update the `LoadCharacter` function to apply this loaded value appropriately, for instance, by setting a `ValueBase` in `player.PlayerData` or applying an attribute to the character model.
+
+```lua
+-- Inside GetSavedDataTable function
+-- ...
+ToReturnTable.NewDataField = Profile.Data[CharTable[Option]].NewDataField -- Retrieve new field
+-- ...
+
+-- Inside LoadCharacter function
+-- ...
+-- Apply the loaded data
+player.PlayerData.NewDataField.Value = DataTable.NewDataField -- Example: Update PlayerData value
+-- ...
+```
+</Step>
+<Step>
+**Update Creation/Saving Logic (If Needed):** If the new field requires a specific initial value when a character is first created (different from the template default), update the `MakeCharacter` function in the `CharacterCreator` script. Also, review any functions that perform explicit saves (like `SaveData`, `SaveData2`, `SaveClothing`) to ensure they correctly handle the new field if necessary, although direct modification of `Profile.Data` is usually sufficient for ProfileService to save changes.
+</Step>
+<Step>
+**Update Modification Logic:** Any other scripts that need to read or write this new data field should be updated to access it via `Profile.Data[characterKey].NewDataField`.
+</Step>
+</Steps>
+
+<Callout title="ProfileService Reconciliation">
+A key benefit of ProfileService is its automatic data reconciliation. When you add a new field to the `ProfileTemplate`, ProfileService will automatically add that field (with its default value) to existing player profiles the next time they are loaded, preventing errors related to missing data fields in older profiles.
+</Callout>

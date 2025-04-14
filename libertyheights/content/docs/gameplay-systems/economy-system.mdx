@@ -1,0 +1,80 @@
+---
+title: Economy System (Cash & Bank)
+---
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+This document explains how the primary forms of player currency – cash on hand and money stored in the bank (ATM) – are managed and persisted within the game.
+
+## Data Storage via ProfileService
+
+The core of the economy relies on **ProfileService** for persistent storage. Each player's cash and bank balance are stored within their active character's data table (`RPCharacterOne` or `RPCharacterTwo`), which is part of the main `Profile.Data` table managed by ProfileService.
+
+Specifically, two key fields are used within the character's data table:
+```lua
+-- Inside Profile.Data.RPCharacterOne / RPCharacterTwo
+{
+  -- ... other fields ...
+  Cash = 50, -- number: Represents the liquid currency the player possesses directly.
+  InATM = 0, -- number: Represents the currency deposited in the bank/ATM system.
+  -- ... other fields ...
+}
+```
+New characters typically start with a default `Cash` value (e.g., 50) and zero `InATM` balance.
+
+## Loading and Displaying Balances
+
+When a player loads into the game with a specific character, the `CharacterCreator` script retrieves the saved `Cash` and `InATM` values from the loaded `Profile.Data`. To make these values accessible for gameplay systems and UI display, they are mirrored into `IntValue` instances located under the `Player` object, specifically `player.PlayerData.Cash` and `player.PlayerData.InATM`.
+
+User interface elements, such as the main HUD displaying currency, should read from these `player.PlayerData` values to show the player's current balances. The `SendPlayerInfo` function within the `CharacterCreator` script appears to play a role in the initial setup of this UI display when the character loads.
+
+## Modifying Balances
+
+To ensure changes persist across sessions, modifications to a player's cash or bank balance **must** be made directly to the `Cash` and `InATM` fields within their `Profile.Data` table. ProfileService automatically handles the background saving of these changes.
+
+The process involves these steps:
+1.  **Get Profile:** Obtain a reference to the player's loaded profile using the `DataManager`.
+    ```lua
+    local DataManager = require(game:GetService("ServerScriptService").ProfileService:FindFirstChild("DataManager"))
+    local player = --[[ The Player object ]]
+    local Profile = DataManager.Profiles[player]
+    if not Profile then return end -- Handle error: Profile not loaded
+    ```
+2.  **Identify Character:** Determine the active character slot key (`RPCharacterOne` or `RPCharacterTwo`).
+    ```lua
+    local characterSlot = player.PlayerData.CurrentChar.Value
+    local characterKey = "RPCharacter" .. (characterSlot == 1 and "One" or "Two")
+    ```
+3.  **Modify `Profile.Data`:** Directly change the `Cash` or `InATM` value within `Profile.Data[characterKey]`. Perform necessary checks before modification (e.g., checking for sufficient funds before deducting).
+    ```lua
+    -- Example: Player deposits $50 into ATM
+    if Profile.Data[characterKey] and Profile.Data[characterKey].Cash >= 50 then
+        Profile.Data[characterKey].Cash -= 50
+        Profile.Data[characterKey].InATM = (Profile.Data[characterKey].InATM or 0) + 50
+    else
+        print("Not enough cash to deposit")
+        -- Handle failure appropriately
+    end
+    ```
+4.  **Update Live `PlayerData` Values:** This step is crucial for immediate feedback in the UI and for other scripts that might read the live values. After successfully modifying `Profile.Data`, update the corresponding `IntValue` objects under `player.PlayerData`.
+    ```lua
+    -- After modifying Profile.Data...
+    player.PlayerData.Cash.Value = Profile.Data[characterKey].Cash
+    player.PlayerData.InATM.Value = Profile.Data[characterKey].InATM
+    ```
+ProfileService takes care of saving the changes made to `Profile.Data` automatically.
+
+## ATM Interaction (Potential Legacy System)
+
+<Callout title="Note on ATMServer.server.luau">
+A script exists at `src/ServerScriptService/ATMServer.server.luau` which seems designed to handle ATM interactions. However, it uses a separate, potentially older datastore system (`ModuleScriptFolder/DataStore`) and manages a distinct `ATMValue` under `player.MiscFolder`. Furthermore, the logic within this script for handling deposits and withdrawals appears to be **commented out**.
+
+Therefore, it's highly likely that the current, active system for managing bank balances relies solely on the `InATM` field within the main **ProfileService** data. Developers should focus on interacting with `Profile.Data.InATM` for bank-related operations and treat `ATMServer.server.luau` as potentially deprecated or incomplete unless specified otherwise.
+</Callout>
+
+## Adding Economy Features
+
+Expanding the economy system generally involves modifying the ProfileService data structure and related scripts:
+
+*   **New Currencies:** To add currencies like cryptocurrency or dirty money, define new fields within the `RPCharacterOne` and `RPCharacterTwo` tables in the `ProfileTemplate` used by ProfileService. Update the character loading logic (`GetSavedDataTable`, `LoadCharacter`) to handle these new fields and create corresponding `ValueBase` instances under `player.PlayerData`. Modify UI scripts to display and interact with the new currency values.
+*   **Transactions:** Implement server-side logic for operations like player trading or store purchases. This logic must retrieve player profiles, validate balances within `Profile.Data`, modify the `Cash` or `InATM` (or other currency) fields for all involved parties in their respective `Profile.Data` tables, and crucially, update the live `player.PlayerData` values for immediate UI and gameplay reflection. Robust security checks and potentially logging should be included for all transactions.

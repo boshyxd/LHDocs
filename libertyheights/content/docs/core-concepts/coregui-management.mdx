@@ -1,0 +1,26 @@
+---
+title: CoreGui Management
+---
+import { Callout } from 'fumadocs-ui/components/callout';
+
+This document describes the client-side script located at `src/StarterPlayerScripts/SetCoreGui.client.luau`, which is responsible for managing the visibility of default Roblox CoreGui elements.
+
+## Purpose
+
+The primary function of this script is to disable certain built-in Roblox UI elements that might interfere with or be replaced by the game's custom user interface. By disabling these CoreGuis, the game ensures a cleaner look and prevents redundant information display.
+
+## Functionality
+
+The script runs locally for each player as it's placed in `StarterPlayerScripts`. It performs the following actions:
+
+1.  **Connects to `CharacterAdded`:** It listens for the local player's character being added to the game (i.e., when the player spawns or respawns).
+2.  **Disables CoreGuis:** Inside the `CharacterAdded` event handler (after a brief `task.wait` to allow other scripts to initialize), it calls `StarterGui:SetCoreGuiEnabled()` to disable specific CoreGui types:
+    *   `Enum.CoreGuiType.PlayerList`: This hides the default Roblox player leaderboard.
+    *   `Enum.CoreGuiType.Health`: This hides the default Roblox health bar that appears top-center.
+3.  **Initial Check:** The script also performs an initial check when it first runs. If the `LocalPlayer.Character` already exists (meaning the script might have started after the character spawned), it immediately attempts to disable the same CoreGuis.
+
+All calls to `SetCoreGuiEnabled` are wrapped in `pcall` to prevent potential errors from halting the script's execution.
+
+## Integration
+
+This script works automatically as part of the client initialization process. Its existence implies that the game uses custom UI elements to display player lists and health information, replacing the default Roblox versions. Developers working on UI should be aware that the standard PlayerList and Health bar are intentionally hidden by this script.

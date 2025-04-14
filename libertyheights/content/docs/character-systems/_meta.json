@@ -1,0 +1,10 @@
+{
+  "title": "Character Systems",
+  "pages": [
+    "character-lifecycle",
+    "clothing-system",
+    "mask-system",
+    "ragdoll-system",
+    "death-system"
+  ]
+}

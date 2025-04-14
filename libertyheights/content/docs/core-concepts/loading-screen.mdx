@@ -1,0 +1,53 @@
+---
+title: Loading Screen System
+---
+import { Callout } from 'fumadocs-ui/components/callout';
+
+This document describes the custom loading screen implemented by the script `src/ReplicatedFirst/GUI/LoadingScreenGUI/Handler.client.luau`.
+
+## Overview
+
+This script runs very early during the player joining process because it's located in `ReplicatedFirst`. Its primary purpose is to provide a custom visual loading experience while game assets are preloaded in the background, replacing the default Roblox loading screen. It displays visuals, plays background music, shows a simulated loading bar, and handles the transition into the main game UI.
+
+## Functionality
+
+1.  **Initialization:**
+    *   The script first checks if it's running in Studio and exits if so (likely to allow faster testing without the loading sequence).
+    *   It clones the `LoadingScreen` ScreenGui from `ReplicatedFirst` into the player's `PlayerGui` if it's not already there.
+    *   It removes the default Roblox loading screen using `ReplicatedFirst:RemoveDefaultLoadingScreen()`.
+    *   It disables all CoreGuis using `StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.All, false)` to ensure only the custom loading screen is visible.
+2.  **Asset Preloading:**
+    *   It gathers a list of assets (`GameAssets`) to preload, including children of the main `CombinedGUI`, `StarterGui`, and the entire `Workspace`.
+    *   It starts preloading these assets asynchronously using `ContentProvider:PreloadAsync(GameAssets)`.
+3.  **Visuals & Audio:**
+    *   It plays background music (`CombinedGUI/DrillBGM`).
+    *   It manages several UI elements within the `LoadingScreen` ScreenGui:
+        *   `BlackImageFolder`: Contains multiple images that are faded in and out randomly while loading (`StillLoading` loop).
+        *   `TextImage`: An image that is faded out towards the end of the loading sequence.
+        *   `LoadBar` & `LoadBG`: A simulated loading bar that tweens its size over a fixed duration (`PlayFakeLoad` function), independent of the actual asset loading progress.
+        *   `SkipLabel`: A text label that appears after a delay, prompting the user to skip.
+4.  **Skip Functionality:**
+    *   After a 5-second delay, the "Skip" label fades in and pulses.
+    *   An `InputBegan` connection listens for keyboard, touch, or gamepad input.
+    *   If input is detected *before* the fake loading completes (`HitPastLoad == false`), it cancels the fake loading animation (`task.cancel(TaskFLoad)`), quickly fills the loading bar, changes the label text to "Skipping..", and triggers a faster fade-out sequence (`PlayTheEndFast`).
+5.  **Transition:**
+    *   Once the fake loading completes naturally (`PlayFakeLoad`) or is skipped (`PlayTheEndFast`), a fade-out sequence begins (`PlayTheEnd` or `PlayTheEndFast`).
+    *   This sequence fades out the black images one by one and finally fades out the entire `LoadingScreen` ScreenGui.
+    *   Crucially, it **waits for the player's character to be added** (`Player.CharacterAdded:Wait()`) before proceeding.
+    *   After the character exists and the fade-out is complete, it calls `EndIt()`.
+6.  **Cleanup (`EndIt`):**
+    *   Enables the main game UI (`CombinedGUI/Simple/Modern.Enabled = true`).
+    *   Reduces the background music volume.
+    *   Re-enables all CoreGuis (`StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.All, true)`).
+    *   Destroys the background music after a delay.
+
+## Key Points & Considerations
+
+*   **Fake Loading Bar:** The loading bar's progress is simulated with fixed timers and tweens in the `PlayFakeLoad` function. It does **not** reflect the actual progress of `ContentProvider:PreloadAsync`.
+*   **Asset Preloading Scope:** The script attempts to preload assets from `CombinedGUI`, `StarterGui`, and the entire `Workspace`. For large workspaces, this could be inefficient or incomplete. Consider refining the `GameAssets` table to preload only essential assets needed immediately after loading.
+*   **Character Dependency:** The transition out of the loading screen explicitly waits for `Player.CharacterAdded`. This ensures the character exists before the main UI is enabled and CoreGuis are restored.
+*   **Studio Behavior:** The script intentionally disables itself in Studio, meaning the custom loading screen won't appear during Studio testing sessions.
+
+<Callout title="CoreGui Management">
+This script initially disables all CoreGuis. Another script, `StarterPlayerScripts/SetCoreGui.client.luau`, later specifically re-disables the PlayerList and Health bar after the character loads. This ensures they remain hidden even after this loading script re-enables all CoreGuis.
+</Callout>

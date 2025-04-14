@@ -1,0 +1,83 @@
+---
+title: Inventory & Item System
+---
+import { Callout } from 'fumadocs-ui/components/callout';
+import { File, Folder } from 'fumadocs-ui/components/files';
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+# Inventory & Item System
+
+This document explains how interactive items, primarily represented as `Tool` instances (like weapons, food, job equipment), are managed, stored, and acquired within the game. A key aspect of this system is that, unlike some other game systems, it does not appear to utilize a single, unified inventory table saved within the player's main ProfileService data for general items carried by the character.
+
+## Core Concepts
+
+The game primarily tracks a player's currently held items by monitoring the live contents of their `Player.Backpack` (for unequipped tools) and their `Player.Character` (for the currently equipped tool). Persistence of general items across game sessions seems limited; if a player leaves, items in their Backpack or Character are typically lost unless they are part of a specific system that handles its own saving (like Vaults or potentially Car Inventories).
+
+Tools often utilize Roblox's built-in features for categorization and behavior definition:
+*   **Attributes:** Custom attributes like `MinLevel` or `DefaultHold` can be added to Tool instances to control usage requirements or specific behaviors.
+*   **CollectionService Tags:** Tags such as `WeaponTool`, `Cooked Food`, `PawnShopItem`, or `DrugConsumable` are used to group tools by type, allowing scripts to easily identify and handle specific categories of items.
+*   **`CanBeDropped` Property:** This standard Tool property dictates whether a player can manually drop the item from their inventory. Important or role-specific items often have this set to `false` to prevent loss.
+
+## Item Storage & Acquisition Methods
+
+Instead of a single saved inventory, items are managed through several distinct methods:
+
+### 1. Player Backpack & Character (Live Inventory)
+This is the most immediate form of inventory. Items reside either in the `Player.Backpack` container when unequipped or parented directly to the `Player.Character` model when equipped. Scripts frequently check these locations to determine a player's current possessions. However, items stored solely in these containers are generally **not persistent** across sessions based on the core character loading logic.
+
+```lua
+-- Example: Checking for an equipped tool by name
+local equippedTool = player.Character:FindFirstChildWhichIsA("Tool")
+if equippedTool and equippedTool.Name == "SpecificTool" then
+    -- Player has the specific tool equipped
+end
+
+-- Example: Iterating through backpack items by tag
+for _, item in ipairs(player.Backpack:GetChildren()) do
+    if item:IsA("Tool") and item:HasTag("MyItemTag") then
+        -- Found a tool with the desired tag in the backpack
+    end
+end
+```
+
+### 2. Vault Storage (Persistent)
+The game includes a vault system, likely associated with safes or storage containers in player houses or other locations. Data for items stored in these vaults *is* persistent, saved via ProfileService within the `VaultSafe1` table inside the character's data (`Profile.Data.RPCharacterOne.VaultSafe1`). Interaction with this storage is handled through the "Small Safe Vault UI" (`StarterGui/SmallSafeVaultUI`), which presumably updates the `VaultSafe1` table when items are deposited or withdrawn. A `WeightModule` also appears to be associated with this system, possibly imposing capacity limits.
+
+### 3. Car Inventory (Persistent - Separate System)
+Vehicles have their own distinct inventory system, managed by the `ServerStorage/Modules/CarInventory.luau` module. This system tracks car ownership, customizations, and potentially items stored *within* the car (`Storage` table). While persistent, its saving mechanism seems separate from the main player ProfileService data and is handled internally by the `CarInventory` module or related scripts (details require further investigation, potentially involving its own datastore).
+
+### 4. Dynamic Granting (Conditional)
+A significant number of items, particularly job-related tools or default equipment, are not stored persistently for the player but are instead granted dynamically by server scripts based on specific conditions being met. The item persists only as long as the condition does (or until the item is consumed/removed). Examples include:
+*   **Phone:** A basic phone tool is cloned from `ServerStorage` and given to every player by the `CharacterCreator` script each time their character loads.
+*   **Police Equipment:** Items like handcuffs, tasers, and firearms are granted by the `UniformSystemServer` based on the officer's rank and requests made through the uniform UI. These are cloned from master copies.
+*   **Job-Specific Tools:** Various scripts, including tutorials and active job modules, grant necessary tools (like raw food, specific quest items) when a player performs relevant tasks.
+
+## Adding New Items/Tools
+
+Integrating a new interactive item involves creating the `Tool` instance and then deciding on its acquisition and storage method within the existing framework:
+
+<Steps>
+<Step>
+**Create the Tool:** Develop the `Tool` instance, including its `Handle`, necessary `LocalScript`s for client-side interactions (animations, UI), and any server `Script`s for effects or backend logic. Configure its properties like `CanBeDropped` and add relevant Attributes or CollectionService Tags. Place the master copy in an appropriate storage location (`ServerStorage` for server-cloned items, `ReplicatedStorage` if clients need direct access).
+</Step>
+<Step>
+**Define Acquisition Method:** Determine how players obtain this item:
+    *   *Store Purchase:* Modify store scripts to deduct currency from `Profile.Data` and clone the tool into the player's `Backpack`.
+    *   *Dynamic Granting:* Integrate logic into the relevant system (job, rank, event) to check conditions and clone the tool into the `Backpack`.
+    *   *Vault Storage:* Update the Vault UI and associated logic to allow this item type to be stored/retrieved from the `VaultSafe1` table in `Profile.Data`.
+    *   *Default Item:* Modify an early-running script (like `CharacterCreator`) to clone it into the `Backpack` on character load.
+</Step>
+<Step>
+**Configure Properties:** Set the `Tool.CanBeDropped` property appropriately. Add any necessary custom Attributes (e.g., `MinLevel`) or CollectionService Tags (e.g., `Consumable`) for identification and behavior control.
+</Step>
+<Step>
+**Implement Functionality:** Write the necessary client-side (`LocalScript` within the Tool) and server-side logic (e.g., in `ServerScriptService/ToolHandlers` or via RemoteEvent listeners) to make the tool function as intended when equipped or activated.
+</Step>
+<Step>
+**Address Persistence (If Necessary):** If the item absolutely must persist in the player's direct possession (Backpack/Character) across sessions, and Vault/Car storage isn't appropriate, a custom saving mechanism would need to be implemented. This would likely involve creating a new table within `Profile.Data` to store identifiers for items in the Backpack/Character, saving this list when the player leaves, and modifying the character loading process to read the list and re-clone the items. Note that this approach does not seem standard for general items in this project.
+</Step>
+</Steps>
+
+<Callout title="Focus on Live State & Specific Containers">
+When working with items, remember that checking the live `Player.Backpack` and `Player.Character` is the primary method for determining current possessions. Persistent storage seems reserved for specific containers like Vaults (using ProfileService) and the separate Car Inventory system, rather than a comprehensive saved list of all items a player might be carrying.
+</Callout>

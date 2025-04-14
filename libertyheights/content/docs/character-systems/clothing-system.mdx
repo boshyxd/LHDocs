@@ -1,0 +1,92 @@
+---
+title: Clothing & Accessory System
+---
+import { File, Folder, Files } from 'fumadocs-ui/components/files';
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+This document explains how clothing items (shirts, pants) and cosmetic accessories (like hair, hats, glasses, shoes, and jewelry) are stored, managed, and applied to player characters within the game.
+
+## Asset Storage Location
+
+The master copies of all wearable assets are stored centrally within `ReplicatedStorage`, specifically under the `Clothes` folder. This location ensures that both the server (for applying items) and potentially clients (for previews in shops or menus) can access the necessary models and information.
+
+<Files>
+  <Folder name="ReplicatedStorage" defaultOpen>
+    <Folder name="Clothes" defaultOpen>
+        <Folder name="Hair" defaultOpen>
+            <Folder name="Male" />
+            <Folder name="Female" />
+            <Folder name="Beards" /> {/* Contains facial hair Accessories */}
+        </Folder>
+         <Folder name="Hats" />
+         <Folder name="Glasses" />
+         <Folder name="Shoes" />
+         <Folder name="Jewelry" />
+         {/* Other folders for different accessory types may exist */}
+    </Folder>
+  </Folder>
+</Files>
+
+Inside these folders, each item is typically represented as a standard Roblox `Accessory` instance. It's crucial that each accessory has a unique and descriptive **name**, as this name is used to reference the item when saving player data.
+
+## Data Storage (ProfileService)
+
+A character's currently equipped outfit and accessories are saved persistently using ProfileService. This data is stored within the character's specific data table (`RPCharacterOne` or `RPCharacterTwo`) inside the main `Profile.Data` table.
+
+The relevant fields within the character's data table are:
+```lua
+-- Inside Profile.Data.RPCharacterOne / RPCharacterTwo
+{
+  -- ... other fields ...
+  ShirtId = "7042521158", -- string: Asset ID of the equipped Shirt instance
+  PantsId = "5893987232", -- string: Asset ID of the equipped Pants instance
+  RPHair = "AssetName", -- string: Name of the hair Accessory instance from ReplicatedStorage/Clothes/Hair/...
+  RPFacialHair = "AssetName", -- string: Name of the facial hair Accessory instance from ReplicatedStorage/Clothes/Hair/Beards
+  RPHairColor = { R=0, G=0, B=0 }, -- table: Raw Color3 components (0-1) applied to the hair accessory's Handle
+  RPFacialHairColor = { R=0, G=0, B=0 }, -- table: Raw Color3 components (0-1) applied to the facial hair accessory's Handle
+  Accessories = { -- array table: List of other equipped accessories
+      { Type = "Hat", Name = "Fedora" }, -- Type corresponds to folder name, Name is the Accessory instance name
+      { Type = "Glasses", Name = "Aviators" },
+      { Type = "Shoe", Name = "Sneakers" },
+      -- ... more accessories
+  },
+  -- ... other fields ...
+}
+```
+Standard clothing like shirts and pants are saved using their Roblox Asset IDs. Hair and facial hair are saved by referencing the **name** of the corresponding `Accessory` instance stored in `ReplicatedStorage`, with their colors saved separately. Other accessories (hats, glasses, shoes, jewelry, etc.) are stored as an array of tables within the `Accessories` field, where each table specifies the item's `Type` (matching the folder name in `ReplicatedStorage/Clothes`) and its `Name` (matching the `Accessory` instance name).
+
+## Applying Items to Character
+
+When a character is loaded into the game (handled by the `LoadCharacter` function in the `CharacterCreator` script), the saved clothing and accessory data is retrieved from the profile and applied to the character model:
+
+*   **Shirts & Pants:** The `SetClothing` helper function ensures `Shirt` and `Pants` instances exist on the character and sets their `ShirtTemplate` and `PantsTemplate` properties to `"rbxassetid://"` followed by the saved `ShirtId` and `PantsId`.
+*   **Hair & Facial Hair:** The `AddHair` and `AddFacialHair` functions locate the correct `Accessory` instance in the `ReplicatedStorage/Clothes/Hair/` subfolders by matching the saved `RPHair` or `RPFacialHair` name. They clone this accessory, apply the saved `RPHairColor` or `RPFacialHairColor` to its `Handle`, and then add the cloned accessory to the character's Humanoid using `Humanoid:AddAccessory()`.
+*   **Other Accessories:** The `AddAccessories` function iterates through the `Accessories` array saved in the profile. For each entry, it uses the `Type` field to find the correct subfolder within `ReplicatedStorage/Clothes` (using the `AccessoryLookUpTables` mapping) and then finds the specific `Accessory` instance by its `Name`. It clones the found accessory and adds it to the character's Humanoid.
+
+## Saving Clothing & Accessory Changes
+
+Saving changes depends on the item type:
+
+*   **Shirts & Pants:** The `CharacterCreator` script includes a `SaveClothing` function that reads the current `ShirtTemplate` and `PantsTemplate` IDs from the player's live character model and updates the `ShirtId` and `PantsId` fields in `Profile.Data`. Currently, this function seems primarily called only when a *new* character is created. Saving changes made through clothing stores or other means would require explicitly calling `SaveClothing` or a similar function at the appropriate time (e.g., upon exiting the store UI).
+*   **Accessories (including Hair/Facial Hair):** Changes involving accessories – such as equipping a new hat, changing hair style or color – must be saved by directly modifying the `Accessories` array or the `RPHair`, `RPFacialHair`, `RPHairColor`, `RPFacialHairColor` fields within the character's table in `Profile.Data`. ProfileService automatically handles the persistence of these changes.
+
+## Adding New Items
+
+Adding new clothing or accessories follows these general steps:
+
+<Steps>
+<Step>
+**Create & Upload Asset:** For shirts or pants, create the clothing item on the Roblox website and note its Asset ID. For accessories (hats, hair, glasses, etc.), model the item, ensure it's correctly configured as an `Accessory` instance (including Handle, Attachments, and Welds), give it a unique and descriptive name, and place the finalized `Accessory` instance into the appropriate subfolder within `ReplicatedStorage/Clothes/`.
+</Step>
+<Step>
+**Update Game Logic (If Applicable):** If the new item will be sold in an in-game store, update the relevant store's configuration or scripts to include the new item. If it's intended as a default or starting item, configurations like `RepoLib.StarterClothing` might need updating. No changes are typically needed to the *datastore structure* itself, as items are referenced by ID or name/type.
+</Step>
+<Step>
+**Test:** Thoroughly test equipping the new item through its intended method (e.g., buying from a store, using a command). Verify that the item appears correctly on the character and, crucially, that the change persists after the player rejoins the game. This involves checking that the correct Asset ID (for clothing) or Name/Type (for accessories) is saved in `Profile.Data` and is correctly applied by the `LoadCharacter` function.
+</Step>
+</Steps>
+
+<Callout title="Naming and Type Consistency">
+Maintaining consistent and accurate naming for `Accessory` instances within `ReplicatedStorage/Clothes` is vital. Likewise, ensuring the `Type` field used when saving accessories matches the corresponding folder name and the keys in `AccessoryLookUpTables` (used by `AddAccessories`) is essential for the system to correctly find and apply saved accessories. Always double-check Roblox Asset IDs for shirts and pants.
+</Callout>

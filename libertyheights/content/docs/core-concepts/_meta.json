@@ -1,0 +1,11 @@
+{
+  "title": "Core Concepts",
+  "pages": [
+    "index",
+    "project-structure",
+    "remotes",
+    "datastore",
+    "coregui-management",
+    "loading-screen"
+  ]
+}

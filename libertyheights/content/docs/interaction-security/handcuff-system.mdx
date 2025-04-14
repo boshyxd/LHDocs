@@ -1,0 +1,66 @@
+---
+title: Handcuff System
+---
+import { Callout } from 'fumadocs-ui/components/callout';
+import { File, Folder } from 'fumadocs-ui/components/files';
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+# Handcuff System
+
+This document details the system that allows authorized personnel, typically police officers, to physically handcuff and subsequently drag other players. The system involves client-initiated actions, server-side validation, and state management primarily handled by the `HandCuffsModule` located in `ReplicatedStorage/Modules`, with `ServerScriptService/HandCuffsServer.server.luau` serving as the secure server-side interface.
+
+## Overview
+
+The handcuffing process generally starts when a police officer targets another player and initiates an action, likely via a dedicated tool or UI element. This client action triggers either the `CuffEvent` or `WeldEvent` RemoteFunction. The `HandCuffsServer` script receives this request, first verifying the initiating player belongs to the designated police group. If authorized, the server script then invokes the corresponding function (`Cuff` or `Weld`) within the `HandCuffsModule`. This core module is responsible for applying the actual state changes, including managing animations, restricting tool usage for the cuffed player, creating the physical weld for dragging, and tracking the overall state.
+
+## Key Components
+
+The system integrates several essential parts:
+
+*   **Server Interface (`HandCuffsServer.server.luau`):** This server script acts as the gatekeeper. It listens for client invocations on specific RemoteFunctions (`CuffEvent`, `WeldEvent`, `TakeItemEvent`, `CheckGunPermitEvent`). Its primary role is to perform permission checks (verifying the invoking player is in the police group) before passing the request along to the `HandCuffsModule` for execution.
+*   **Core Logic (`ReplicatedStorage/Modules/HandCuffsModule.luau`):** This ModuleScript contains the primary functions (`Cuff`, `Weld`, `ClearHandcuffState`) that manipulate player state, manage animations, handle physics constraints (welds), and track which players are cuffed or being dragged.
+*   **Remotes (in `ReplicatedStorage/Events/`):** Facilitate client-server communication:
+    *   `CuffEvent` (RemoteFunction): Invoked by an officer's client to toggle the cuffed state on a target.
+    *   `WeldEvent` (RemoteFunction): Invoked by an officer's client to toggle welding a target player to themselves for dragging.
+    *   `ImHandCuffed_Event` (RemoteEvent): Fired by the server back *to the initiating officer's client* after a cuff/uncuff action, likely to update the officer's UI.
+    *   `TakeItemEvent` (RemoteFunction): Allows authorized officers to remove items from a target's backpack (permission checked in `HandCuffsServer`).
+    *   `CheckGunPermitEvent` (RemoteFunction): Allows authorized officers to check a target's gun permit status (permission checked in `HandCuffsServer`, data retrieved from ProfileService).
+*   **Animation:** An animation instance named "Being Cuffed" located in `ReplicatedStorage/Animations` is played on the target player while they are in the cuffed state.
+
+## State Management within `HandCuffsModule`
+
+The `HandCuffsModule` uses a combination of instance attributes and internal Lua tables to track the state:
+
+*   **Attributes:** For easy access by other scripts, boolean attributes are set directly on the target player's character: `"Cuffed"` (on HumanoidRootPart and Character model) and `"Welded"` (on HumanoidRootPart).
+*   **Internal Tables:** The module uses several tables for more detailed tracking:
+    *   `CuffedPlayers`: Maps target HumanoidRootParts to their current boolean cuffed status.
+    *   `PlayersCuffingAlready`: Maps officer HumanoidRootParts to a boolean indicating if they are currently welding/dragging someone (prevents dragging multiple targets).
+    *   `ArrestedPlayers`: Maps target UserIDs to a table containing references to the target `Player`, the `ArrestingOfficer` player, the `HandcuffTime`, and a `FormallyArrested` flag (set to `true` by the Arrest/Jail system).
+    *   `LoadedAnimations`: Caches loaded animation tracks for efficiency.
+    *   `Connections`: Stores references to active event connections for proper cleanup.
+
+## The Cuffing Process
+
+When an officer attempts to cuff a target:
+1.  The client invokes `CuffEvent`.
+2.  `HandCuffsServer` verifies the officer's police group membership.
+3.  `HandCuffsModule.Cuff` is called. It checks the target's current cuffed state and toggles it.
+4.  **If Cuffing:** The "Cuffed" attributes are set to `true`, the "Being Cuffed" animation is played on the target, all tools in the target's backpack and character are disabled, and a listener is connected to prevent equipping new tools. The internal `CuffedPlayers` and `ArrestedPlayers` tables are updated (initially marking `FormallyArrested` as `false`), and `ImHandCuffed_Event` is fired back to the officer's client.
+5.  **If Uncuffing:** The "Cuffed" attributes are set to `false`, the animation is stopped, tools are re-enabled, the tool listener is disconnected, `CuffedPlayers` is updated, and `ImHandCuffed_Event` is fired to the officer. Note that uncuffing does not automatically clear the entry from the `ArrestedPlayers` table; that state is managed separately by the formal arrest/release process.
+
+## The Welding/Dragging Process
+
+When an officer attempts to drag (weld) a cuffed target:
+1.  The client invokes `WeldEvent`.
+2.  `HandCuffsServer` verifies police group membership.
+3.  `HandCuffsModule.Weld` checks the target's "Welded" attribute.
+4.  **If Welding:** It first checks if the officer is already dragging someone else. If not, it modifies the target's physics properties (makes parts massless, enables `PlatformStand`, sets `WalkSpeed` to 0), positions the target behind the officer, creates a `WeldConstraint` connecting the officer's and target's HumanoidRootParts, sets the target's "Welded" attribute to `true`, updates the module's tracking tables (`PlayersCuffingAlready`, `ArrestedPlayers`), and sets up a listener to automatically unweld if the officer disconnects.
+5.  **If Unwelding:** It resets the target's physics properties, destroys the `WeldConstraint`, clears the "Welded" attribute, updates tracking tables, and disconnects the officer's disconnect listener.
+
+## State Cleanup Function (`ClearHandcuffState`)
+
+The `HandCuffsModule.ClearHandcuffState` function serves as a crucial cleanup utility. It is explicitly called by the `ArrestTimerModule` when a player is formally arrested or released, and potentially on player join, to ensure no lingering cuffing or welding states persist. This function comprehensively resets all related attributes ("Cuffed", "Welded") to `false`, clears entries from the module's internal tracking tables (`CuffedPlayers`, `PlayersCuffingAlready`), destroys any active `WeldConstraint`, stops the cuffing animation, disconnects related event listeners, and restores default physics properties (mass, PlatformStand state, WalkSpeed).
+
+<Callout title="Interaction with Arrest System">
+It's important to distinguish between being *handcuffed* (a physical state managed by this module) and being *formally arrested* (a state involving a jail timer and persistent data managed by the `ArrestTimerModule`). A player can be handcuffed and dragged without having been formally processed for arrest yet. The formal arrest process, handled by `ArrestTimerModule`, includes a call to `ClearHandcuffState` to remove the physical restraints once the player is considered formally incarcerated.
+</Callout>

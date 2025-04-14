@@ -1,0 +1,50 @@
+---
+title: Death & Respawn System
+---
+import { Callout } from 'fumadocs-ui/components/callout';
+
+This document describes the client-side handling of player death, the visual death screen experience, and the initiation of the respawn process, primarily managed by `src/StarterGui/DeathScreen/DeathScreenManager.client.luau`.
+
+## Overview
+
+When a player's character dies, this script takes over the screen presentation. It applies visual effects (blur, color correction), plays sounds (heartbeat, ringing), disables most other UI elements, displays a death screen with killer information (if available), and eventually triggers the server to respawn the player. It also handles the transition back to the normal game view after respawn.
+
+## Key Components
+
+*   **Client Script:** `StarterGui/DeathScreen/DeathScreenManager.client.luau` (Handles all client-side logic).
+*   **ScreenGui:** `StarterGui/DeathScreen/DeathScreen` (Contains the UI elements).
+    *   `MainFrame`: The main container for death text, killer info, etc.
+    *   `Killer`: Frame displaying killer details (name, avatar, damage, weapon).
+    *   `Light`, `Dark`: Frames likely used for fade transitions.
+    *   `Heartbeat`, `DeathSound`, `Type` (Sound): Audio cues.
+*   **Effects:** Instances stored under `StarterGui/DeathScreen/Bleeding Effects` (e.g., `Blur`, `ColorCorrectionEffect` named "Black", "Bleed") are cloned into `game.Lighting` to create visual effects during the death sequence.
+*   **Server Communication:**
+    *   `ReplicatedStorage.Remotes.RemoteEvent.RespawnCharacterWithModel`: Fired by the client to request the server to respawn the character.
+*   **State Tracking:** Uses local variables like `isDead` and `isRespawning` to manage the flow.
+
+## Death Sequence (`handleDeath` & `BeforeDeath`)
+
+The death sequence is initiated when the local player's `Humanoid.Died` event fires or if their `HumanoidRootPart` is removed (indicating they fell off the map). A debounce mechanism prevents the sequence from running multiple times if death events fire rapidly. The script also waits for the `Deceased` tag to be added to the character via `CollectionService` before fully proceeding.
+
+The sequence unfolds in stages:
+
+1.  **Pre-Death Effects (`BeforeDeath`):** This function simulates the moments before fading out. It clones and plays heartbeat and ringing sounds. It also clones visual post-processing effects (like Blur, ColorCorrection) from a template folder into `game.Lighting` and tweens their properties over several seconds to create effects like darkening, desaturation, and blurring, simulating injury or loss of consciousness. During this phase, most other game UIs and CoreGuis are disabled via the `disableAllUI` function.
+2.  **Death Screen Activation (`handleDeath`):** After a brief delay (around 3 seconds) following the start of the pre-death effects, the main death screen UI (`ScreenGui.Enabled = true`) is shown. The client immediately fires the `RespawnCharacterWithModel` RemoteEvent, signaling the server to begin the respawn process for the player character model. The mouse cursor is hidden, and the death screen's main frame fades in with a "YOU DIED" message and a randomly selected quote displayed via a typewriter effect. If killer information was recorded (in `character.Getkill_List` and `character.DamageLog`), the killer's name, avatar, total damage, and primary weapon are displayed in the `KillerFrame`. A final heartbeat sound plays.
+3.  **Transition Back (`handleDeath` continued):** After another delay (around 3 seconds on the death screen), the transition back to gameplay begins. A white screen effect (`Light` frame) fades in and out. The main death screen frame is hidden, the mouse cursor is re-enabled, and all CoreGuis are re-enabled (though the standard PlayerList and Health bar are immediately hidden again by `SetCoreGui.client.luau`). The `resetDeathScreen` function restores the death screen UI elements to their default states for the next use. Finally, after another short delay, the `enableAllUI` function restores the visibility of other game GUIs that were hidden earlier. Any visual effects added to `Lighting` are removed.
+
+## UI Management (`disableAllUI`, `enableAllUI`)
+
+To provide an immersive death experience, the script temporarily hides most other UI elements. The `disableAllUI` function iterates through all `ScreenGui` instances in `StarterGui` and `PlayerGui`. It saves the current `Enabled` state of each GUI (unless it's explicitly excluded, like the DeathScreen itself) into an internal table (`guiStates`) and then sets the GUI's `Enabled` property to `false`. It also disables all CoreGuis. The main `PlayerInfo` GUI is handled specially by making its contents invisible rather than disabling the entire GUI.
+
+Conversely, the `enableAllUI` function restores the previous UI state after the death sequence concludes. It iterates through the GUIs in `PlayerGui`, setting their `Enabled` property back to the value stored in the `guiStates` table. It also re-enables CoreGuis and makes the `PlayerInfo` elements visible again.
+
+## Important Considerations
+
+*   **Respawn Trigger:** The client is responsible for initiating the respawn process by firing the `RespawnCharacterWithModel` RemoteEvent. The server does not automatically respawn the player simply because their Humanoid died.
+*   **Killer Info Source:** The display of accurate killer information relies on other game systems correctly populating the `Getkill_List` folder (specifically a `Killer` StringValue) and the `DamageLog` folder (containing details about damage sources) under the player's character *before* the `handleDeath` function executes.
+*   **UI State Restoration:** The system saves and restores the `Enabled` state of GUIs present when `disableAllUI` runs. Dynamically created GUIs or those not following the standard `StarterGui` -> `PlayerGui` pattern might not be handled correctly.
+*   **CoreGui Interaction:** There's a deliberate interaction where this script re-enables all CoreGuis, but `SetCoreGui.client.luau` immediately runs afterwards (on character spawn) to specifically re-disable the PlayerList and Health bar, ensuring custom game elements are used instead.
+
+<Callout title="Server-Side Respawn Logic">
+This client script only *requests* the respawn. The actual server-side logic that listens for the `RespawnCharacterWithModel` event and performs the character reloading (likely involving `Player:LoadCharacter()` and potentially delays or confirmations) resides in a separate server script, which was not analyzed here.
+</Callout>

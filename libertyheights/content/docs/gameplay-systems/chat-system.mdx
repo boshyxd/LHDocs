@@ -1,0 +1,65 @@
+---
+title: Chat System
+---
+import { Callout } from 'fumadocs-ui/components/callout';
+import { File, Folder } from 'fumadocs-ui/components/files';
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+This document describes the game's text chat system, focusing on how proximity chat, custom commands, and message filtering are implemented. The main server-side script managing this is `ServerScriptService/ChatSystem/init.server.luau`.
+
+## Overview
+
+The system utilizes Roblox's modern `TextChatService` (TCS) for its core functionality, including handling standard chat commands and applying Roblox's default text filtering. The server script enhances this by implementing proximity-based chat delivery and integrating with a potential custom chat UI located in `StarterGui/CustomChat`.
+
+## Proximity Chat Implementation
+
+Proximity chat is achieved by intercepting messages within the standard TCS flow. The `RBXGeneral.ShouldDeliverCallback` function in the `init.server.luau` script is assigned a custom function that runs for every message sent in the general channel, for every potential recipient.
+
+This callback function uses a helper, `inDistance`, to calculate the distance between the message sender (`srcPlayer`) and the potential recipient (`player`). The calculation uses different ranges based on the message's metadata, which corresponds to the chat command used:
+*   **Default (e.g., /say):** 20 studs
+*   **Shout (/shout):** 40 studs
+*   **Whisper (/whisper):** 5 studs
+
+The `ShouldDeliverCallback` returns `true` only if the recipient is within the calculated range, allowing the standard TCS system to display the message in their chat window. If the recipient is outside the range, the callback returns `false`, and TCS discards the message for that recipient.
+
+## Custom Chat UI Integration
+
+In addition to controlling delivery in the standard TCS window, the system relays messages to a custom chat UI (`StarterGui/CustomChat`) for players within range.
+
+*   **Relaying Standard Messages:** When the `ShouldDeliverCallback` determines a message *should* be delivered (i.e., the players are within range), it also fires the `RelayChatMessage` RemoteEvent (located in `ReplicatedStorage/RemoteEvents/Chat/`) specifically to the recipient client. This allows the custom UI script to receive the same message (`senderUserId`, `messageText`, `metadata`) and display it, potentially with unique formatting or features.
+*   **Handling Custom Submissions:** The system provides the `SubmitCustomChatMessage` RemoteFunction for the custom UI to send messages directly. When invoked by a client, the server filters the raw text using `TextService:FilterStringAsync`. It then iterates through all players, checks if they are within range using the `inDistance` function, and fires the `ReceievedCustomChatMessage` RemoteEvent to each nearby client. This ensures messages originating from the custom UI are properly filtered and adhere to the proximity rules for display within that custom UI.
+
+## /me Command Handling
+
+Roleplay actions initiated with `/me` (or similar commands triggering the same metadata) are handled separately. When such a command is detected (likely on the client, which then fires the remote), the `DisplayMeAction` RemoteEvent is fired to the server. The `init.server.luau` script listens for this event and requires the `DisplayMeAction.luau` module (located in the same directory) to process and display the action text appropriately to nearby players, likely through the custom chat UI via `ReceievedCustomChatMessage`.
+
+## Filtering and Security
+
+Text filtering is handled at two points:
+1.  Messages sent through standard TCS commands (`/say`, `/shout`, etc.) are automatically filtered by the `TextChatService` *before* the `ShouldDeliverCallback` is executed.
+2.  Messages sent through the custom UI via `SubmitCustomChatMessage` are explicitly filtered on the server using `TextService:FilterStringAsync` before being relayed to other clients.
+
+<Callout title="Security">
+While filtering is handled, remember that any custom commands or actions implemented via RemoteEvents/Functions should include server-side validation to prevent exploits (e.g., checking permissions, cooldowns, validating arguments).
+</Callout>
+
+## Key Communication Remotes
+
+The following remotes, located under `ReplicatedStorage/RemoteEvents/Chat/`, facilitate communication:
+
+*   **`SubmitCustomChatMessage` (RemoteFunction):** Client -> Server. Used by the custom UI to send a message for filtering and proximity-based relay via `ReceievedCustomChatMessage`.
+*   **`ReceievedCustomChatMessage` (RemoteEvent):** Server -> Client(s). Delivers filtered messages (originally submitted via the function above) to nearby clients for display in the custom UI.
+*   **`RelayChatMessage` (RemoteEvent):** Server -> Client(s). Delivers standard, already-filtered TCS messages to nearby clients for display in the custom UI, triggered by the `ShouldDeliverCallback`.
+*   **`SendCommand` (RemoteEvent):** Client -> Server. Its exact purpose isn't fully clear from `init.server.luau`, but likely used for custom slash commands that require server-side execution beyond standard chat messages.
+*   **`DisplayMeAction` (RemoteEvent):** Client -> Server. Used to send `/me` action text to the server for processing and display to nearby players.
+
+## Extending the Chat System
+
+*   **Adding Range Modifiers:** To introduce new commands that affect chat range (e.g., `/lowervoice`), modify the `inDistance` function within `init.server.luau` to recognize the new command's metadata (`msg.Metadata`) and apply the desired range calculation.
+*   **Implementing Custom Commands:** For commands requiring server actions, utilize the `SendCommand` RemoteEvent or create new, dedicated remotes. Ensure robust server-side validation and necessary filtering for any text involved.
+*   **Modifying Custom UI:** Enhance the client-side chat experience by updating the scripts within `StarterGui/CustomChat`. Ensure it correctly handles receiving messages via both `RelayChatMessage` and `ReceievedCustomChatMessage` and uses the appropriate remotes for sending messages or commands.
+*   **Changing /me Behavior:** Adjust the logic within `ServerScriptService/ChatSystem/DisplayMeAction.luau` to alter how `/me` actions are formatted or displayed.
+
+<Callout title="Police Communication">
+Note that specific handlers for police radio or team chat appear to have been removed from the main `init.server.luau` script. Faction-specific communication likely utilizes a separate, dedicated system, possibly linked to the Police UI or other faction management scripts.
+</Callout>

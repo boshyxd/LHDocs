@@ -1,0 +1,69 @@
+---
+title: Ragdoll System
+---
+import { Callout } from 'fumadocs-ui/components/callout';
+import { File, Folder } from 'fumadocs-ui/components/files';
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+This document explains the implementation and management of the character ragdoll system, which allows characters to enter a physics-based state, often used for reactions to events like death or being tased.
+
+## Overview
+
+The ragdoll system uses a combination of server-side setup and state management, along with client-side state handling and camera adjustments. Ragdolling is primarily triggered on the server by adding the tag `"Ragdoll"` to a character model using `CollectionService`. This tag addition initiates the creation of physical constraints and filters, and subsequent state changes are handled by both server and client scripts listening for the tag or related attributes.
+
+## Key Components
+
+The system is composed of several scripts working together:
+
+*   **Server-Side:**
+    *   `ServerScriptService/R15Ragdoll/RagdollHandler.luau`: This is the main server controller. It listens for the "Ragdoll" tag being added or removed using `CollectionService` signals. Upon tag changes, it calls `setRagdollEnabled` to manage the character's state and requires the `buildRagdoll` module for initial setup.
+    *   `ServerScriptService/R15Ragdoll/buildRagdoll/init.luau`: This module orchestrates the one-time setup required when a character ragdolls for the first time. It ensures `Humanoid.BreakJointsOnDeath` is disabled, makes the `HumanoidRootPart` non-collidable, and then calls helper modules (`buildConstraints`, `buildCollisionFilters`) to create the necessary physical components.
+    *   `ServerScriptService/R15Ragdoll/buildRagdoll/buildConstraints.luau`: Responsible for creating the physical joints (`BallSocketConstraint`, `HingeConstraint`) that allow the ragdoll effect. It uses templates based on joint names (e.g., "Hip", "Shoulder") and links them to the original `Motor6D` joints via an ObjectValue for later toggling. These constraints are stored in a folder named `RagdollConstraints` under the character model.
+    *   `ServerScriptService/R15Ragdoll/buildRagdoll/buildCollisionFilters.luau`: Creates `NoCollisionConstraint` instances between specific body parts (like limb roots or parent/child limbs) to prevent physics instability. These are also stored in the `RagdollConstraints` folder.
+*   **Client-Side:**
+    *   `StarterPlayerScripts/ClientRagdoll.client.luau`: This script runs on each client. It monitors the `Ragdolled` attribute on character models (which is assumed to be set by the server in sync with the "Ragdoll" tag). When this attribute changes, the script updates the client's view of the `Humanoid` state (`Physics` or `GettingUp`), adjusts physics properties (`Massless`, `AutoRotate`), and, for the local player, manages camera focus (`Camera.CameraSubject`) and disables the reset button upon death.
+*   **Trigger Mechanism:** The entire system is initiated by server scripts adding or removing the `"Ragdoll"` tag from a character model using `CollectionService`.
+
+## Server-Side Logic Flow
+
+The `RagdollHandler.luau` script manages the server-side state transitions:
+
+1.  **Tag Detection:** It uses `CollectionService:GetInstanceAddedSignal("Ragdoll")` and `GetInstanceRemovedSignal("Ragdoll")` to detect when the tag is applied or removed from any instance.
+2.  **Ragdoll Activation (`ragdollAdded` function):** When the "Ragdoll" tag is added to a character for the first time, this function is called. It first invokes the `buildRagdoll` module (`buildRagdoll/init.luau`) to create the necessary `RagdollConstraints` folder containing physical joints and collision filters if it doesn't already exist. Then, it calls `setRagdollEnabled(character, true)`.
+3.  **Ragdoll Deactivation (`ragdollRemoved` function):** When the "Ragdoll" tag is removed, this function simply calls `setRagdollEnabled(character, false)`.
+4.  **State Toggling (`setRagdollEnabled` function):** This function performs the core state changes:
+    *   **Enabling Ragdoll (`isEnabled = true`):** It sets the `Humanoid` state to `Physics` and `PlatformStand` to `true`. It disables the standard `Animate` script to prevent animation conflicts. Crucially, it iterates through the `RagdollConstraints`, finds the associated `Motor6D` via the "RigidJoint" `ObjectValue`, and disables the motor (by setting `Motor6D.Part1 = nil`), which allows the physical constraints (BallSocket, Hinge) to take effect. It also unequips any tools the player is holding and prevents them from equipping new ones while ragdolled.
+    *   **Disabling Ragdoll (`isEnabled = false`):** It sets the `Humanoid` state to `GettingUp` and `PlatformStand` to `false`. It re-enables the `Animate` script. It iterates through the `RagdollConstraints` again, finding the `Motor6D` and re-enabling it by setting `Motor6D.Part1` back to its original connected part (`constraint.Attachment1.Parent`). This deactivates the physical constraints, allowing the character animations to resume control. It also disconnects the listener that prevents tool equipping.
+
+## Client-Side Logic Flow
+
+The `ClientRagdoll.client.luau` script ensures the client-side representation matches the ragdoll state:
+
+1.  **Attribute Monitoring:** It connects to the `AttributeChanged` signal of character models, specifically looking for changes to the `"Ragdolled"` attribute.
+2.  **State Synchronization (`ChangeHumanoidState` function):** When the "Ragdolled" attribute changes:
+    *   If `true`, it sets the local `Humanoid` state to `Physics`, makes the primary part massless, disables auto-rotation, and (for the local player) shifts the camera focus to the `HumanoidRootPart`.
+    *   If `false`, it sets the local `Humanoid` state to `GettingUp`, restores mass, re-enables auto-rotation, and (for the local player) shifts camera focus back to the `Humanoid`.
+3.  **Reset Button Handling:** For the local player, it also connects to the `Humanoid.Died` event to disable the core reset button, preventing players from resetting while dead (and potentially ragdolled).
+
+## Triggering Ragdoll
+
+To activate or deactivate the ragdoll state for a character, a **server script** should use the `CollectionService`:
+
+```lua
+local CollectionService = game:GetService("CollectionService")
+local character = --[[ Reference to the target character model ]]
+
+-- To make the character ragdoll:
+CollectionService:AddTag(character, "Ragdoll")
+
+-- To make the character stop ragdolling (e.g., after a timer):
+task.wait(5) -- Example delay
+if character and character.Parent then -- Ensure character still exists
+    CollectionService:RemoveTag(character, "Ragdoll")
+end
+```
+It's assumed that a server-side mechanism (perhaps within `RagdollHandler` or another script) mirrors the presence of the "Ragdoll" tag to the `character:SetAttribute("Ragdolled", boolean)` value that the `ClientRagdoll` script listens for, ensuring client-server state synchronization.
+
+<Callout title="Dependencies and Requirements">
+For this system to function correctly, character models must adhere to the standard R15 attachment naming conventions (e.g., `WaistRigAttachment`, `LeftShoulderRigAttachment`, etc.) as the `buildRagdoll` scripts rely on these names to identify joints. Additionally, the presence of a standard `Animate` script under the character is assumed for disabling/enabling during state changes.
+</Callout>

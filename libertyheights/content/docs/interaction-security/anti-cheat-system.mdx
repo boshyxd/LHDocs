@@ -1,0 +1,67 @@
+---
+title: Anti-Cheat System
+---
+import { Callout } from 'fumadocs-ui/components/callout';
+import { File, Folder } from 'fumadocs-ui/components/files';
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+# Anti-Cheat System
+
+This document provides an overview of the server-side anti-cheat system, located in `ServerScriptService/AntiCheat/`, detailing its structure, core mechanics, and intended detection capabilities.
+
+## Overview
+
+The system is designed to detect potential cheating (like speed hacking, flying, or teleporting) by sampling player character positions frequently and analyzing the data using various detection modules. It uses a central `CheatModule` to manage signals and shared state, and individual modules within the `Modules/` subfolder for specific detection logic.
+
+<Callout title="Current Status">
+It's important to note that based on the current state of `init.server.luau`, the connections that feed position data from the core system to the individual detection modules (`AntiTeleport`, `AntiFly`, `AntiSpeed`) are **commented out**. Consequently, these specific cheat detections are likely **inactive** by default. To enable them, these connection lines within `init.server.luau` must be uncommented.
+</Callout>
+
+## Key Components
+
+The system comprises several key scripts and modules:
+
+*   **`init.server.luau`:** This script serves as the entry point and orchestrator. It initializes the system upon server start, loads the detection modules from the `Modules/` folder, and initiates the position sampling loop (`startSampling`) for each player character once they have fully spawned (indicated by the `HasSpawned` attribute). It is also responsible for connecting the core `CheatModule` signals to the appropriate functions within the detection modules (though these connections are currently inactive). Debugging features, like displaying data graphs in Studio (`showGraphs`), can also be enabled here.
+*   **`CheatModule.luau`:** This central module acts as a shared resource hub. It defines the core `Signal` instances (`PositionSampled`, `CharacterAdded`, `CharacterRemoved`, `GraphDataPost`) used for communication between the main loop and the detection modules. It also holds shared state information, including the `Positions` table (storing recent position samples for all tracked characters) and the `SafeTeleportFlags` table (used to mark legitimate teleports). Furthermore, it contains the `IsExcluded` function, which determines if a player should be exempt from anti-cheat checks based on Studio settings and their admin rank (configured via attributes on `ServerStorage/CM-X Module/Config`).
+*   **`Modules/` Folder:** This folder houses the individual detection modules, each targeting a specific type of cheat. Modules like `AntiTeleport.luau`, `AntiFly.luau`, and `AntiSpeed.luau` are expected to exist here. Each module typically implements specific functions:
+    *   `ProcessSample(character, sampleData)`: This function receives position samples via the `CheatModule.PositionSampled` signal and contains the primary logic for detecting the specific cheat (e.g., analyzing speed, altitude changes, or position jumps).
+    *   `CharacterRemoved(character)` and `PlayerRemoving(player)`: These functions are connected to corresponding signals and allow the module to clean up any internal data it was tracking for a character or player when they leave the game or their character is removed.
+
+## Position Sampling Mechanism
+
+The core data gathering process is handled by the `startSampling` function within `init.server.luau`. For each non-excluded character that spawns, this function initiates a loop:
+1.  It runs at a frequency defined by `positionSampleRate` (default: 10 Hz).
+2.  In each iteration, it records the character's `HumanoidRootPart.Position`, the current `tick()`, and an `Adjusted` flag.
+3.  Before recording, it checks `CheatModule.SafeTeleportFlags[character]`. If this flag is `true` (indicating a legitimate teleport just occurred), the `Adjusted` flag in the sample data is set to `true`, and the `SafeTeleportFlags` entry is cleared. This allows detection modules like AntiTeleport to ignore this specific position change.
+4.  The new sample `{Position, Time, Adjusted}` is added to the beginning of the character's data array stored in `CheatModule.Positions`.
+5.  The array is trimmed to maintain a maximum history length defined by `positionSampleSize` (default: 100 samples).
+6.  The `CheatModule.PositionSampled` signal is fired, passing the character and the newly recorded sample data to any connected detection modules.
+
+## Intended Detection Logic
+
+While the connections are currently disabled, the intended logic for the detection modules is as follows:
+*   **AntiTeleport:** Would analyze consecutive position samples received via `ProcessSample`. It would calculate the distance moved between samples and compare it to the maximum possible distance based on the character's `WalkSpeed` and the time delta. If a position change significantly exceeds this expected distance, and the `Adjusted` flag (indicating a safe teleport) is `false`, it would likely flag a violation.
+*   **AntiFly:** Would monitor the character's `Humanoid.State` and vertical position changes over time. It would look for patterns inconsistent with normal jumping or falling, such as sustained periods in the `Freefall` state without altitude loss or significant upward velocity without jumping, potentially flagging these as flight.
+*   **AntiSpeed:** Would calculate the character's horizontal velocity based on the change in position between samples over time. This calculated velocity would be compared against the character's current `Humanoid.WalkSpeed` (plus a reasonable tolerance for variations). Consistently exceeding the expected speed would likely trigger a speed hacking violation.
+
+## Configuration and Exclusions
+
+The anti-cheat system allows for configuration and exclusions:
+*   **Exclusions:** The `CheatModule.IsExcluded` function determines if checks should be skipped for a player. This depends on two settings in `ReplicatedFirst.StudioSettings` (`DisableAntiCheatStudio`, `AntiCheatIncludeAdmins`) and the player's rank in the admin group defined in `ServerStorage/CM-X Module/Config`. Admins/mods can be excluded unless `AntiCheatIncludeAdmins` is true. All checks can be disabled in Studio if `DisableAntiCheatStudio` is true.
+*   **Safe Teleports:** To prevent legitimate teleports from triggering the AntiTeleport detection, scripts performing teleports (like `SafeTeleport.luau`) must set `CheatModule.SafeTeleportFlags[character] = true` immediately *before* modifying the character's position. The sampling loop will detect this flag, mark the subsequent position sample as `Adjusted = true`, and clear the flag.
+
+## Enabling and Modifying Detections
+
+To activate or customize the anti-cheat detections:
+
+<Steps>
+<Step>
+**Enable Connections:** Locate the commented-out blocks within `src/ServerScriptService/AntiCheat/init.server.luau` that connect `CheatModule` signals (`PositionSampled`, `CharacterRemoved`) to the `ProcessSample` and `CharacterRemoved`/`PlayerRemoving` functions of the desired detection modules (e.g., `AntiTeleport`, `AntiFly`, `AntiSpeed`). Uncomment these lines to activate the respective detections.
+</Step>
+<Step>
+**Tune Detection Modules:** Modify the parameters and logic within the individual module scripts (`Modules/AntiTeleport.luau`, etc.). This might involve adjusting speed thresholds, height limits, required violation counts, or the sensitivity of the detection algorithms to better suit the game's physics and reduce false positives.
+</Step>
+<Step>
+**Add New Detections:** Create a new `ModuleScript` within the `Modules/` folder. Implement the necessary functions (`ProcessSample`, `CharacterRemoved`, etc.) to contain the logic for the new cheat detection. Finally, connect these functions to the appropriate `CheatModule` signals within `init.server.luau`.
+</Step>
+</Steps>
